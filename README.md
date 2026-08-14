@@ -165,7 +165,28 @@ es público.
 | Banco | Tipo | Estado |
 |---|---|---|
 | BBVA | Tarjeta de crédito | ✅ verificado contra un estado de cuenta real |
+| BBVA | Débito / LIBRETON | ✅ verificado contra un estado de cuenta real |
 | Nu | Cuenta de débito | ✅ verificado contra un estado de cuenta real |
+| Mercado Pago | Monedero | ✅ verificado contra un estado de cuenta real |
+
+### Transferencias entre cuentas propias
+
+El problema más grande de juntar varias cuentas no son los parsers, es el doble
+conteo. Cuando te mandas dinero de BBVA a Mercado Pago, aparece como salida en
+un estado de cuenta y como entrada en el otro. Contarlo sería inventar ingresos
+que nunca existieron.
+
+Con cuatro estados de cuenta de un mismo mes:
+
+| | Sin detección | Con detección |
+|---|---|---|
+| "Ingresos" | ~$114,000 | **$33,416.94** (nómina + rendimientos) |
+| Transferencias | contadas | $139,840.67 ignoradas |
+
+Se detecta por el nombre del titular en la descripción (`Reglas` → *Tus nombres
+en los estados de cuenta*), por menciones a otras carteras tuyas, y por
+conceptos que son internos por definición: pago de tarjeta propia, retiro de
+efectivo y movimientos de Cajita.
 
 Para agregar otro, ver [docs/PARSERS.md](docs/PARSERS.md).
 

@@ -37,8 +37,11 @@ const RE_TOTAL = /^TOTAL (CARGOS|ABONOS)\s+-?\$([\d,]+\.\d{2})$/i;
 const RE_PERIODO = /Periodo:\s*(\d{2}-[a-zA-Z]{3}-\d{4})\s*al\s*(\d{2}-[a-zA-Z]{3}-\d{4})/i;
 const RE_TARJETA_DIGITAL = /;\s*Tarjeta Digital\s*\*+(\d+)/i;
 
-/** Un abono ("-") que corresponde a un pago de la tarjeta, no a un reembolso. */
+/** Un abono ("-") que corresponde a un pago de la tarjeta. */
 const RE_PAGO = /BMOVIL|PAGO TDC|SU PAGO|PAGO RECIBIDO|SPEI|TRANSFERENCIA|DEPOSITO/i;
+
+/** Un abono que sí baja lo gastado: una devolución del comercio. */
+const RE_DEVOLUCION = /BONIFICACI[OÓ]N|DEVOLUCI[OÓ]N|REEMBOLSO|CANCELACI[OÓ]N|AJUSTE A FAVOR|NOTA DE CR[EÉ]DITO/i;
 
 export const BANK_ID = 'bbva';
 export const BANK_LABEL = 'BBVA (tarjeta de crédito)';
@@ -107,9 +110,25 @@ export function parse(lines) {
       description = description.slice(0, mc.index).trim();
     }
 
-    const kind = sign === '+'
-      ? 'expense'
-      : (RE_PAGO.test(description) ? 'transfer' : 'income');
+    // En una TARJETA DE CRÉDITO no existe el ingreso: aquí no te cae dinero.
+    // Un abono ("-") es casi siempre el pago que haces para liberar tu línea,
+    // y eso es una transferencia desde tu cuenta de débito, no un ingreso.
+    // La excepción es la devolución de un comercio, que sí baja lo gastado.
+    let kind, transferReason = null, review = false;
+    if (sign === '+') {
+      kind = 'expense';
+    } else if (RE_DEVOLUCION.test(description)) {
+      kind = 'income';
+      transferReason = 'devolucion';
+    } else if (RE_PAGO.test(description)) {
+      kind = 'transfer';
+      transferReason = 'pago-tarjeta';
+    } else {
+      // No reconocido: se asume pago, pero se marca para que lo revises.
+      kind = 'transfer';
+      transferReason = 'pago-tarjeta';
+      review = true;
+    }
 
     const tx = {
       bank: BANK_ID,
@@ -118,9 +137,19 @@ export function parse(lines) {
       description: tidyDescription(description),
       amount: money(amt),
       kind,
+      direction: sign === '+' ? 'out' : 'in',
+      transfer_reason: transferReason,
+      is_internal: kind === 'transfer',
       raw_line: t,
       page: line.page,
     };
+    if (review) {
+      tx.needs_review = true;
+      warnings.push(
+        `No reconocí este abono: "${tidyDescription(description)}" por $${money(amt).toFixed(2)}. ` +
+        'Lo marqué como pago de tarjeta. Si fue una devolución, cámbialo a Ingreso en el preview.',
+      );
+    }
     if (cardLast4) tx.card_last4 = cardLast4;
 
     if (!tx.occurred_on || !Number.isFinite(tx.amount)) {
@@ -132,8 +161,10 @@ export function parse(lines) {
   }
 
   // --- validación contra los totales impresos en el propio PDF -------------
-  const sumExpense = round2(sum(transactions.filter((t) => t.kind === 'expense')));
-  const sumIncome = round2(sum(transactions.filter((t) => t.kind !== 'expense')));
+  // Se suma por dirección, no por `kind`: para BBVA un pago de tarjeta es un
+  // ABONO aunque nosotros lo tratemos como transferencia.
+  const sumExpense = round2(sum(transactions.filter((t) => t.direction === 'out')));
+  const sumIncome = round2(sum(transactions.filter((t) => t.direction === 'in')));
 
   const check = buildCheck(
     { label: 'Cargos', declared: totals.CARGOS ?? null, computed: sumExpense },

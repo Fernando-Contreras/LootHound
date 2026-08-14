@@ -49,6 +49,8 @@ export function renderDashboard(root, state, actions) {
         `No se cuentan ${fin.formatMoney(totals.transfers)} en transferencias ` +
         '(pagos de tarjeta y movimientos entre tus cuentas): mueven dinero, no lo gastan.'),
 
+      cashCard(monthTxs, state, actions),
+
       // ---- por categoría ---------------------------------------------
       el('div', { class: 'grid grid--2' },
         el('section', { class: 'card' },
@@ -98,6 +100,46 @@ export function renderDashboard(root, state, actions) {
         ),
       ),
     ),
+  );
+}
+
+/**
+ * Conciliación de efectivo: lo único que la app no puede saber sola.
+ * Los retiros salen de los estados de cuenta; los gastos los capturas tú.
+ * La diferencia es lo que deberías traer en la cartera.
+ */
+function cashCard(monthTxs, state, actions) {
+  const cash = [...state.accountMap.values()].find((a) => a.kind === 'cash');
+  if (!cash) return null;
+
+  const r = fin.cashReconciliation(monthTxs, cash.id);
+  if (!r || (r.withdrawn === 0 && r.spent === 0)) return null;
+
+  return el('section', { class: 'card cashcard' },
+    el('div', { class: 'card__head' },
+      el('h3', {}, 'Efectivo'),
+      el('button', {
+        class: 'btn btn--ghost btn--sm',
+        onclick: () => actions.goToTransactions({ accountIds: [cash.id] }),
+      }, 'Ver movimientos'),
+    ),
+    el('div', { class: 'cashcard__row' },
+      el('div', {}, el('span', { class: 'stat__label' }, 'Retiraste'),
+        el('strong', {}, fin.formatMoney(r.withdrawn))),
+      el('span', { class: 'cashcard__op' }, '−'),
+      el('div', {}, el('span', { class: 'stat__label' }, 'Registraste'),
+        el('strong', {}, fin.formatMoney(r.spent))),
+      el('span', { class: 'cashcard__op' }, '='),
+      el('div', {}, el('span', { class: 'stat__label' }, 'Deberías traer'),
+        el('strong', { class: r.expectedOnHand < 0 ? 'is-bad' : '' },
+          fin.formatMoney(r.expectedOnHand))),
+    ),
+    el('p', { class: 'note' },
+      r.expectedOnHand < 0
+        ? 'Registraste más efectivo del que sacaste. Revisa si algún gasto quedó duplicado.'
+        : r.expectedOnHand > 0
+          ? `Si traes menos de ${fin.formatMoney(r.expectedOnHand)} en la cartera, te faltó capturar algún gasto.`
+          : 'Todo el efectivo que sacaste ya está capturado.'),
   );
 }
 

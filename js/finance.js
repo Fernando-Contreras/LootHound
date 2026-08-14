@@ -142,6 +142,51 @@ export function topMerchants(txs, n = 5) {
     .slice(0, n);
 }
 
+/**
+ * Conciliación de efectivo.
+ *
+ * El efectivo es el único dinero sin rastro digital, así que se deduce:
+ *   lo que sacaste del cajero  −  lo que capturaste como gasto en efectivo
+ *   =  lo que debería quedar en tu cartera
+ *
+ * Si el número no cuadra con lo que traes, te faltó capturar algún gasto.
+ * Los retiros salen solos de los estados de cuenta (BBVA débito los marca como
+ * "RETIRO SIN TARJETA"), así que esto no requiere capturar nada extra.
+ *
+ * @param {Array} txs            todos los movimientos del periodo
+ * @param {string} cashAccountId id de la cuenta "Efectivo"
+ */
+export function cashReconciliation(txs, cashAccountId) {
+  if (!cashAccountId) return null;
+
+  let withdrawn = 0;   // transferencias que ENTRAN al efectivo
+  let spent = 0;       // gastos pagados en efectivo
+  let returned = 0;    // efectivo que devolviste al banco (raro, pero pasa)
+
+  for (const tx of txs) {
+    const amount = Number(tx.amount);
+    if (tx.kind === 'transfer' && tx.counter_account_id === cashAccountId) {
+      withdrawn += amount;                    // salió del banco → entró a la cartera
+    } else if (tx.kind === 'transfer' && tx.account_id === cashAccountId) {
+      returned += amount;                     // salió de la cartera → volvió al banco
+    } else if (tx.account_id === cashAccountId) {
+      if (tx.kind === 'expense') spent += amount;
+      else if (tx.kind === 'income') withdrawn += amount;  // efectivo que te dieron
+    }
+  }
+
+  const expected = round2(withdrawn - spent - returned);
+  return {
+    withdrawn: round2(withdrawn),
+    spent: round2(spent),
+    returned: round2(returned),
+    /** Lo que deberías traer en la cartera si capturaste todo. */
+    expectedOnHand: expected,
+    /** Sin capturar nada, todo el retiro aparece como "pendiente". */
+    unaccounted: round2(withdrawn - spent - returned),
+  };
+}
+
 /** Compara dos periodos y devuelve la variación porcentual del gasto. */
 export function comparePeriods(current, previous) {
   const a = summarize(current);

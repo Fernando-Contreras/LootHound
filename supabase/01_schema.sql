@@ -20,7 +20,11 @@ create table if not exists public.accounts (
   user_id     uuid not null default auth.uid() references auth.users(id) on delete cascade,
   name        text not null check (length(trim(name)) between 1 and 60),
   kind        text not null check (kind in ('cash','debit','credit')),
-  bank        text          check (bank in ('bbva','nu')),   -- null = no importa PDFs
+  bank        text          check (bank in ('bbva','bbva_debito','nu','mercadopago')),
+  -- Cuentas donde NUNCA te cae dinero de terceros: todo lo que entra lo mandas
+  -- tú desde otra cuenta tuya. Sirve para no contar tus propios depósitos
+  -- como ingresos (ej. Nu, Mercado Pago).
+  deposits_are_transfers boolean not null default false,
   currency    char(3) not null default 'MXN',
   archived    boolean not null default false,
   created_at  timestamptz not null default now(),
@@ -48,7 +52,7 @@ create table if not exists public.imports (
   id                       uuid primary key default gen_random_uuid(),
   user_id                  uuid not null default auth.uid() references auth.users(id) on delete cascade,
   account_id               uuid not null references public.accounts(id) on delete cascade,
-  bank                     text not null check (bank in ('bbva','nu')),
+  bank                     text not null check (bank in ('bbva','bbva_debito','nu','mercadopago')),
   file_name                text,
   period_start             date,
   period_end               date,
@@ -69,6 +73,17 @@ create table if not exists public.transactions (
   account_id         uuid not null references public.accounts(id)   on delete restrict,
   category_id        uuid          references public.categories(id) on delete set null,
   import_id          uuid          references public.imports(id)    on delete set null,
+
+  -- Si es una transferencia entre cuentas TUYAS, aquí va la cuenta del otro
+  -- lado. Un solo renglón describe el movimiento completo: sale de
+  -- `account_id` y entra a `counter_account_id`. No se guardan dos renglones
+  -- para no tener que mantenerlos sincronizados.
+  -- Es lo que permite saber cuánto efectivo sacaste: un retiro es una
+  -- transferencia de la cuenta de débito hacia la cuenta "Efectivo".
+  counter_account_id uuid          references public.accounts(id)   on delete set null,
+  -- Por qué se marcó como transferencia: 'pago-tarjeta', 'retiro-efectivo',
+  -- 'mismo-titular', 'cuenta-propia', 'cajita', 'deposito-propio'.
+  transfer_reason    text,
 
   occurred_on        date not null,                 -- fecha de la operación
   posted_on          date,                          -- fecha de cargo (BBVA la separa)
@@ -93,6 +108,10 @@ create table if not exists public.transactions (
   updated_at         timestamptz not null default now(),
 
   unique (user_id, fingerprint),
+  -- una transferencia no puede tener como destino la misma cuenta de origen
+  constraint counter_account_differs check (
+    counter_account_id is null or counter_account_id <> account_id
+  ),
   constraint fx_fields_together check (
     (original_currency is null and original_amount is null and fx_rate is null)
     or (original_currency is not null and original_amount is not null)
@@ -121,6 +140,19 @@ create unique index if not exists category_rules_unique_pattern
     match_type,
     coalesce(account_id, '00000000-0000-0000-0000-000000000000'::uuid)
   );
+
+
+-- 1.6 Ajustes del usuario
+--     `holder_names` son los nombres con los que apareces como contraparte en
+--     los estados de cuenta. Es lo que permite distinguir una transferencia
+--     tuya de un ingreso real: si el SPEI recibido dice tu propio nombre, es
+--     dinero que te mandaste desde otra de tus cuentas.
+create table if not exists public.settings (
+  user_id       uuid primary key default auth.uid() references auth.users(id) on delete cascade,
+  holder_names  text[] not null default '{}',
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
 
 
 -- ---------------------------------------------------------------------------
@@ -181,16 +213,39 @@ alter table public.categories     enable row level security;
 alter table public.imports        enable row level security;
 alter table public.transactions   enable row level security;
 alter table public.category_rules enable row level security;
+alter table public.settings       enable row level security;
 
 -- Nada de acceso para usuarios no autenticados ni para el rol público.
 revoke all on public.accounts, public.categories, public.imports,
-              public.transactions, public.category_rules
+              public.transactions, public.category_rules, public.settings
   from anon, public;
 
 grant select, insert, update, delete
   on public.accounts, public.categories, public.imports,
-     public.transactions, public.category_rules
+     public.transactions, public.category_rules, public.settings
   to authenticated;
+
+-- ---------------------------------------------------------- settings
+drop policy if exists settings_select on public.settings;
+create policy settings_select on public.settings
+  for select to authenticated
+  using ((select auth.uid()) = user_id);
+
+drop policy if exists settings_insert on public.settings;
+create policy settings_insert on public.settings
+  for insert to authenticated
+  with check ((select auth.uid()) = user_id);
+
+drop policy if exists settings_update on public.settings;
+create policy settings_update on public.settings
+  for update to authenticated
+  using      ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);
+
+drop policy if exists settings_delete on public.settings;
+create policy settings_delete on public.settings
+  for delete to authenticated
+  using ((select auth.uid()) = user_id);
 
 -- ---------------------------------------------------------- accounts
 drop policy if exists accounts_select on public.accounts;
@@ -287,6 +342,13 @@ create policy transactions_insert on public.transactions
       )
     )
     and (
+      counter_account_id is null
+      or exists (
+        select 1 from public.accounts a2
+        where a2.id = counter_account_id and a2.user_id = (select auth.uid())
+      )
+    )
+    and (
       import_id is null
       or exists (
         select 1 from public.imports i
@@ -310,6 +372,13 @@ create policy transactions_update on public.transactions
       or exists (
         select 1 from public.categories c
         where c.id = category_id and c.user_id = (select auth.uid())
+      )
+    )
+    and (
+      counter_account_id is null
+      or exists (
+        select 1 from public.accounts a2
+        where a2.id = counter_account_id and a2.user_id = (select auth.uid())
       )
     )
   );
@@ -378,11 +447,19 @@ declare
   rul record;
   v_cat uuid;
 begin
+  -- Ajustes -----------------------------------------------------------------
+  insert into public.settings (user_id) values (p_user)
+  on conflict (user_id) do nothing;
+
   -- Cuentas -----------------------------------------------------------------
-  insert into public.accounts (user_id, name, kind, bank) values
-    (p_user, 'Efectivo', 'cash',   null),
-    (p_user, 'BBVA',     'credit', 'bbva'),
-    (p_user, 'Nu',       'debit',  'nu')
+  -- `deposits_are_transfers` va en true donde nunca te cae dinero de terceros:
+  -- a Nu y a Mercado Pago sólo llega lo que tú mismo les mandas.
+  insert into public.accounts (user_id, name, kind, bank, deposits_are_transfers) values
+    (p_user, 'Efectivo',      'cash',   null,          false),
+    (p_user, 'BBVA Débito',   'debit',  'bbva_debito', false),
+    (p_user, 'BBVA Crédito',  'credit', 'bbva',        false),
+    (p_user, 'Nu',            'debit',  'nu',          true),
+    (p_user, 'Mercado Pago',  'debit',  'mercadopago', true)
   on conflict (user_id, name) do nothing;
 
   -- Categorías --------------------------------------------------------------
@@ -403,7 +480,8 @@ begin
       ('Sueldo',            'income',  '#22c55e',  10),
       ('Rendimientos',      'income',  '#10b981',  20),
       ('Otros ingresos',    'income',  '#4ade80',  30),
-      ('Transferencia',     'both',    '#64748b', 998)
+      ('Transferencia',     'both',    '#64748b', 998),
+      ('Retiro de efectivo','both',    '#78716c', 997)
     ) as t(name, kind, color, sort_order)
   loop
     insert into public.categories (user_id, name, kind, color, sort_order)

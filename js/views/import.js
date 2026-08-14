@@ -11,6 +11,7 @@
 
 import { el, mount, toast, confirmDialog, withBusy, clear } from '../dom.js';
 import { parseStatement, PARSERS } from '../parsers/index.js';
+import { REASON_LABELS } from '../parsers/identity.js';
 import { applyRules } from '../categorize.js';
 import { assignFingerprints, flagSimilar, dedupeSummary } from '../dedupe.js';
 import * as fin from '../finance.js';
@@ -85,17 +86,34 @@ async function handleFile(file, state, actions) {
 
   try {
     const buffer = await file.arrayBuffer();
-    const result = await parseStatement(buffer);
+    const result = await parseStatement(buffer, null, {
+      // Tu nombre es lo que permite distinguir "me transferí dinero" de
+      // "me pagaron". Sin esto, cada SPEI que te mandas cuenta como ingreso.
+      holderNames: state.settings?.holder_names ?? [],
+    });
 
     // La cuenta destino: la que coincida con el banco detectado.
     const account = [...state.accountMap.values()].find((a) => a.bank === result.bank);
     if (!account) {
       throw new Error(
-        `Detecté un estado de cuenta de ${result.bank.toUpperCase()} pero no ` +
-        'tienes una cuenta con ese banco. Créala primero en Ajustes.');
+        `Detecté un estado de cuenta de ${result.bank} pero no tienes una ` +
+        'cuenta con ese banco. Créala primero en Reglas → Cuentas.');
     }
 
-    for (const tx of result.transactions) tx.account_id = account.id;
+    // Enlaza automáticamente el otro lado de las transferencias internas:
+    // un retiro alimenta la cuenta Efectivo, un pago de tarjeta va a la tarjeta.
+    const cashAccount = [...state.accountMap.values()].find((a) => a.kind === 'cash');
+    const cardAccount = [...state.accountMap.values()].find((a) => a.kind === 'credit');
+
+    for (const tx of result.transactions) {
+      tx.account_id = account.id;
+      if (tx.transfer_reason === 'retiro-efectivo' && cashAccount) {
+        tx.counter_account_id = cashAccount.id;
+      } else if (tx.transfer_reason === 'pago-tarjeta' && cardAccount &&
+                 cardAccount.id !== account.id) {
+        tx.counter_account_id = cardAccount.id;
+      }
+    }
 
     applyRules(result.transactions, state.rules, {
       fallbackCategoryId: state.categoryByName.get('Sin categoría')?.id ?? null,
@@ -253,6 +271,13 @@ function previewTable(p, state, rerender) {
             title: `Se parece a "${tx.similarTo.description}" del ${tx.similarTo.occurred_on} (${tx.similarTo.score}%)`,
           }, `parecido ${tx.similarTo.score}%`),
           tx.optional && el('span', { class: 'tag tag--optional', title: 'No viene como movimiento; afecta el saldo' }, 'opcional'),
+          tx.transfer_reason && REASON_LABELS[tx.transfer_reason] && el('span', {
+            class: 'tag tag--transfer',
+            title: 'No cuenta como gasto ni como ingreso',
+          }, REASON_LABELS[tx.transfer_reason]),
+          tx.needs_review && el('span', {
+            class: 'tag tag--similar', title: 'No lo reconocí con seguridad',
+          }, 'revisar'),
         ),
         el('td', {}, el('select', {
           class: 'select-inline',
@@ -298,6 +323,8 @@ async function doImport(button, host, state, actions) {
 
       const payload = rows.map((t) => ({
         account_id: p.account.id,
+        counter_account_id: t.counter_account_id || null,
+        transfer_reason: t.transfer_reason || null,
         category_id: t.category_id || null,
         import_id: importRecord.id,
         occurred_on: t.occurred_on,

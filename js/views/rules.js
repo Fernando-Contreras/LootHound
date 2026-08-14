@@ -8,12 +8,72 @@ import * as fin from '../finance.js';
 export function renderRules(root, state, actions) {
   mount(root,
     el('div', { class: 'view' },
+      identityCard(state, actions),
       newRuleForm(state, actions),
       rulesTable(state, actions),
       categoriesCard(state, actions),
       accountsCard(state, actions),
       dangerZone(state),
     ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+/**
+ * Tus nombres tal como aparecen en los estados de cuenta.
+ * Es lo que permite que un SPEI que te mandaste a ti mismo NO cuente como
+ * ingreso. Sin esto, cada traspaso entre tus cuentas se contaría dos veces.
+ */
+function identityCard(state, actions) {
+  const names = state.settings?.holder_names ?? [];
+
+  const form = el('form', { class: 'formrow formrow--tight' },
+    el('input', {
+      name: 'name', placeholder: 'JUAN FERNANDO SALINAS CONTRERAS',
+      required: true, maxlength: '80', style: { flex: '2 1 260px' },
+    }),
+    el('button', { class: 'btn btn--primary', type: 'submit' }, 'Agregar'),
+  );
+
+  const save = async (list) => {
+    try {
+      await store.saveSettings({ holder_names: list });
+      await actions.reload();
+    } catch (err) { toast(store.dbErrorMessage(err), 'error'); }
+  };
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const value = form.name.value.trim();
+    if (!value) return;
+    if (names.some((n) => n.toLowerCase() === value.toLowerCase())) {
+      return toast('Ese nombre ya está en la lista.', 'error');
+    }
+    await save([...names, value]);
+    form.reset();
+  });
+
+  return el('section', { class: 'card' },
+    el('h3', {}, 'Tus nombres en los estados de cuenta'),
+    el('p', { class: 'muted' },
+      'Cuando te transfieres dinero entre tus propias cuentas, el banco escribe ' +
+      'tu nombre como contraparte. Con esto la app reconoce que no es un ingreso ' +
+      'nuevo, sino tu mismo dinero cambiando de lugar.'),
+
+    names.length
+      ? el('div', { class: 'chips' }, names.map((n) => el('span', { class: 'chip' },
+          n,
+          el('button', {
+            class: 'iconbtn', title: 'Quitar', type: 'button',
+            onclick: () => save(names.filter((x) => x !== n)),
+          }, '✕'),
+        )))
+      : el('p', { class: 'callout callout--warn' },
+          'Sin nombres configurados, tus transferencias entre cuentas se van a ' +
+          'contar como ingresos y gastos. Agrega tu nombre completo tal como ' +
+          'aparece en tus estados de cuenta.'),
+
+    form,
   );
 }
 

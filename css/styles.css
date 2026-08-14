@@ -257,6 +257,15 @@ tr.is-off { opacity: .5; }
 .tag--dup { background: var(--surface-2); }
 .tag--similar { background: var(--warn-soft); color: var(--warn); }
 .tag--optional { background: var(--info-soft); color: var(--accent); }
+.tag--transfer { background: var(--surface-2); color: var(--muted); text-transform: none; }
+
+.cashcard__row {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  padding: .5rem 0;
+}
+.cashcard__row > div { display: grid; gap: .1rem; }
+.cashcard__row strong { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.cashcard__op { font-size: 1.2rem; color: var(--muted); }
 
 .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .85rem; }
 .chip {

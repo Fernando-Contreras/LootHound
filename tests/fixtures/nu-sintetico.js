@@ -46,8 +46,8 @@ export const expected = {
   count: 6,            // sin contar los rendimientos opcionales
   expense: 1500.00,    // 1000 + 500 — el pago de tarjeta NO es gasto
   outflow: 2300.00,    // 1500 + 800 — esto es lo que Nu declara como "Gastos"
-  income: 2000.00,
-  transfers: 3,        // dos Cajitas + el pago de tarjeta
+  income: 2000.00,     // lo que Nu declara como "Depósitos" (para validar)
+  transfers: 4,        // dos Cajitas + pago de tarjeta + el depósito propio
   saldoFinal: 9750.00,
   period: { start: '2026-07-01', end: '2026-07-31' },
 };

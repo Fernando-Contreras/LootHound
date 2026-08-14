@@ -54,7 +54,7 @@ export async function pdfToLines(buffer) {
     const page = await doc.getPage(p);
     const content = await page.getTextContent();
     for (const line of clusterIntoLines(content.items)) {
-      out.push({ page: p, y: line.y, text: line.text });
+      out.push({ page: p, y: line.y, text: line.text, items: line.items });
     }
     page.cleanup();
   }
@@ -103,7 +103,14 @@ export function clusterIntoLines(items) {
         text += it.str;
         prevEnd = it.x + it.w;
       }
-      return { y: c.y, text: text.replace(/\s+/g, ' ').trim() };
+      // `items` se conserva porque algunos formatos (BBVA débito) sólo se
+      // pueden leer con las coordenadas: sus columnas CARGOS y ABONOS son
+      // indistinguibles en el texto plano, sólo cambia la X del monto.
+      return {
+        y: c.y,
+        text: text.replace(/\s+/g, ' ').trim(),
+        items: items.map((it) => ({ x0: it.x, x1: it.x + it.w, str: it.str })),
+      };
     })
     .filter((l) => l.text !== '');
 }

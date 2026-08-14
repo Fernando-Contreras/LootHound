@@ -29,6 +29,7 @@
 // ---------------------------------------------------------------------------
 
 import { MESES, money, isoDate, stripAccents, tidyDescription } from './common.js';
+import { classifyMovement } from './identity.js';
 import { buildCheck } from './bbva.js';
 
 const RE_TX = /^(\d{2})\s+([A-Za-zÁÉÍÓÚáéíóú]{3})\s+(\d{4})\s+(.+?)\s+([+-])\$([\d,]+\.\d{2})$/;
@@ -64,7 +65,11 @@ export function detect(lines) {
   return /Cuenta Nu:|Nubank, S\.A\./i.test(head);
 }
 
-export function parse(lines) {
+export function parse(lines, options = {}) {
+  // A Nu nunca le cae dinero de terceros: todo lo que entra lo mandas tú desde
+  // otra de tus cuentas. Por eso los depósitos son transferencias por defecto.
+  const { holderNames = [], depositsAreTransfers = true } = options;
+
   const transactions = [];
   const warnings = [];
   const summary = {};
@@ -128,11 +133,14 @@ export function parse(lines) {
     // Ambas son `transfer` para el balance de la app, pero sólo la segunda
     // debe sumarse al comparar contra el total impreso.
     const isCajita = RE_CAJITA.test(description);
-    const isExternalTransfer = !isCajita && RE_TRANSFER_OUT.test(description) && sign === '-';
+    const direction = sign === '-' ? 'out' : 'in';
 
-    let kind;
-    if (isCajita || isExternalTransfer) kind = 'transfer';
-    else kind = sign === '-' ? 'expense' : 'income';
+    const { kind, reason, internal } = classifyMovement({
+      description,
+      direction,
+      holderNames,
+      depositsAreTransfers,
+    });
 
     const tx = {
       bank: BANK_ID,
@@ -142,11 +150,16 @@ export function parse(lines) {
       description: tidyDescription(description.replace(/\s+Compra$/i, '')),
       amount: money(amt),
       kind,
+      direction,
+      transfer_reason: reason,
+      is_internal: internal,
       raw_line: t,
       page: line.page,
     };
-    // marca interna: no se guarda en la base, sólo sirve para la validación
-    if (isExternalTransfer) tx._leavesAccount = true;
+    // Marca interna sólo para validar: una Cajita NO saca dinero de la cuenta
+    // (Nu la excluye de su total de "Gastos"), pero un pago o transferencia
+    // hacia afuera SÍ, y por eso Nu sí lo cuenta ahí.
+    if (direction === 'out' && !isCajita) tx._leavesAccount = true;
 
     if (!Number.isFinite(tx.amount)) {
       warnings.push(`No se pudo leer bien este renglón: "${t}"`);
@@ -177,9 +190,9 @@ export function parse(lines) {
   // Todo lo que sale de la cuenta: gastos + transferencias externas (pagos de
   // tarjeta, SPEI). Es lo que Nu mete en su renglón de "Gastos".
   // Las Cajitas quedan fuera, igual que las deja Nu.
-  const outflow = round2(sum(transactions.filter(
-    (t) => t.kind === 'expense' || t._leavesAccount)));
-  const sumIncome = round2(sum(transactions.filter((t) => t.kind === 'income')));
+  const outflow = round2(sum(transactions.filter((t) => t._leavesAccount)));
+  const sumIncome = round2(sum(transactions.filter(
+    (t) => t.direction === 'in' && !RE_CAJITA.test(t.description))));
 
   const check = buildCheck(
     { label: 'Salidas', declared: summary.gastos ?? null, computed: outflow },

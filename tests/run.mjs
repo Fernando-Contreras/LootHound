@@ -10,6 +10,7 @@ import * as nu from '../js/parsers/nu.js';
 import * as fin from '../js/finance.js';
 import * as dedupe from '../js/dedupe.js';
 import * as cat from '../js/categorize.js';
+import * as id from '../js/parsers/identity.js';
 
 import * as fxBbva from './fixtures/bbva-sintetico.js';
 import * as fxNu from './fixtures/nu-sintetico.js';
@@ -76,8 +77,11 @@ group('parser Nu', () => {
   eq('número de movimientos', reales.length, e.count);
   eq('periodo', r.period, e.period);
   eq('total gastos', totalOf(reales, 'expense'), e.expense);
-  eq('total depósitos', totalOf(reales, 'income'), e.income);
-  eq('cajitas y pagos marcados como transfer',
+  // A Nu no le cae dinero de terceros: todo lo que entra lo mandas tú desde
+  // otra cuenta tuya, así que ningún depósito cuenta como ingreso.
+  eq('los depósitos NO son ingreso', totalOf(reales, 'income'), 0);
+  eq('pero sí cuentan para validar contra el PDF', r.check.rows[1].computed, e.income);
+  eq('cajitas, pagos y depósitos marcados como transfer',
     reales.filter(t => t.kind === 'transfer').length, e.transfers);
   eq('cuadra contra los totales del PDF', r.check.ok, true);
   eq('saldo final reconstruido', r.check.balance.computed, e.saldoFinal);
@@ -230,6 +234,85 @@ group('reglas (categorize.js)', () => {
     cat.suggestRule('OXXO COXUMEL 65')?.pattern, 'OXXO COXUMEL');
   eq('detecta reglas ya existentes',
     cat.ruleExists(reglas, 'oxxo'), true);
+});
+
+// ------------------------------------------------- transferencias propias
+group('transferencias entre cuentas propias (identity.js)', () => {
+  const YO = ['Juan Fernando Salinas Contreras'];
+  const c = (description, direction, extra = {}) =>
+    id.classifyMovement({ description, direction, holderNames: YO, ...extra });
+
+  // El caso que rompe todo si no se detecta: te mandas dinero a ti mismo y
+  // aparece como ingreso en una cuenta y como gasto en la otra.
+  eq('SPEI recibido de mí mismo no es ingreso',
+    c('SPEI RECIBIDO Mercado Pago JUAN FERNANDO SALINAS CONTRERAS', 'in').kind, 'transfer');
+  eq('SPEI enviado a mí mismo no es gasto',
+    c('SPEI ENVIADO Mercado Pago Juan Fernando Salinas Contreras', 'out').kind, 'transfer');
+  eq('razón: mismo titular',
+    c('Transferencia recibida JUAN FERNANDO SALINAS CONTRERAS', 'in').reason, 'mismo-titular');
+
+  // Aunque el nombre no aparezca, si nombra otra cartera tuya también cuenta
+  eq('transferencia a otra cartera propia',
+    c('Transferencia enviada JuanFer Nu', 'out').kind, 'transfer');
+  eq('razón: cuenta propia',
+    c('Transferencia enviada JuanFer Nu', 'out').reason, 'cuenta-propia');
+
+  // Conceptos internos por definición
+  eq('pago de tarjeta', c('PAGO TARJETA DE CREDITO CUENTA: BMOV', 'out').reason, 'pago-tarjeta');
+  eq('retiro de efectivo', c('RETIRO SIN TARJETA ******8534', 'out').reason, 'retiro-efectivo');
+  eq('cajita', c('Depósito en Cajita: Cajita Turbo', 'out').reason, 'cajita');
+
+  // Lo que SÍ es ingreso o gasto de verdad
+  eq('la nómina sí es ingreso', c('PAGO DE NOMINA', 'in').kind, 'income');
+  eq('los rendimientos sí son ingreso', c('Ganancia', 'in').kind, 'income');
+  eq('una compra sí es gasto', c('OXXO COXUMEL 65', 'out').kind, 'expense');
+
+  // Cuentas donde nunca te cae dinero ajeno
+  eq('depósito propio en cuenta marcada',
+    c('Deposito', 'in', { depositsAreTransfers: true }).kind, 'transfer');
+  eq('sin la marca, sería ingreso',
+    c('Deposito', 'in', { depositsAreTransfers: false }).kind, 'income');
+
+  // No confundirse con un comercio que se llame parecido
+  eq('un apellido suelto no basta',
+    id.mentionsHolder('FARMACIA SALINAS', YO), false);
+  eq('nombre completo sí',
+    id.mentionsHolder('JUAN FERNANDO SALINAS CONTRERAS', YO), true);
+  eq('sin acentos y en minúsculas también',
+    id.mentionsHolder('juan fernando salinas contreras', YO), true);
+  eq('sin nombres configurados no detecta nada',
+    id.mentionsHolder('JUAN FERNANDO SALINAS', []), false);
+});
+
+// -------------------------------------------------------- efectivo
+group('conciliación de efectivo (finance.js)', () => {
+  const CASH = 'cash-1';
+  const BANCO = 'bbva-1';
+  const txs = [
+    // retiro del cajero: sale del banco, entra a la cartera
+    { kind: 'transfer', amount: 2000, account_id: BANCO, counter_account_id: CASH,
+      occurred_on: '2026-07-08', transfer_reason: 'retiro-efectivo' },
+    // gastos en efectivo capturados a mano
+    { kind: 'expense', amount: 350, account_id: CASH, occurred_on: '2026-07-09' },
+    { kind: 'expense', amount: 120, account_id: CASH, occurred_on: '2026-07-10' },
+    // un gasto con tarjeta no debe afectar la cartera
+    { kind: 'expense', amount: 900, account_id: BANCO, occurred_on: '2026-07-11' },
+  ];
+
+  const r = fin.cashReconciliation(txs, CASH);
+  eq('efectivo retirado', r.withdrawn, 2000);
+  eq('efectivo capturado', r.spent, 470);
+  eq('debería quedar en la cartera', r.expectedOnHand, 1530);
+  eq('sin cuenta de efectivo devuelve null', fin.cashReconciliation(txs, null), null);
+
+  // si capturas todo, no queda nada pendiente
+  const completo = [...txs, { kind: 'expense', amount: 1530, account_id: CASH, occurred_on: '2026-07-12' }];
+  eq('capturando todo queda en cero', fin.cashReconciliation(completo, CASH).expectedOnHand, 0);
+
+  // las transferencias de efectivo no inflan ingresos ni gastos
+  const s = fin.summarize(txs);
+  eq('el retiro no cuenta como gasto', s.expense, 1370);
+  eq('el retiro no cuenta como ingreso', s.income, 0);
 });
 
 // ---------------------------------------------------------------------- run

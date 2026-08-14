@@ -16,6 +16,7 @@ const state = {
   transactions: [],
   rules: [],
   imports: [],
+  settings: null,
   accountMap: new Map(),
   categoryMap: new Map(),
   categoryByName: new Map(),
@@ -52,13 +53,15 @@ async function loadData() {
   state.loading = true;
   try {
     await store.ensureSeeded();
-    const [accounts, categories, rules, transactions, imports] = await Promise.all([
+    const [accounts, categories, rules, transactions, imports, settings] = await Promise.all([
       store.fetchAccounts(),
       store.fetchCategories(),
       store.fetchRules(),
       store.fetchTransactions(),
       store.fetchImports(),
+      store.fetchSettings(),
     ]);
+    state.settings = settings;
     state.accountMap = new Map(accounts.map((a) => [a.id, a]));
     state.categoryMap = new Map(categories.map((c) => [c.id, c]));
     state.categoryByName = new Map(categories.map((c) => [c.name, c]));

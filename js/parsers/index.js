@@ -3,26 +3,35 @@
 
 import { pdfToLines } from './lines.js';
 import * as bbva from './bbva.js';
+import * as bbvaDebito from './bbva-debito.js';
 import * as nu from './nu.js';
+import * as mercadopago from './mercadopago.js';
 
-export const PARSERS = [bbva, nu];
+// El orden importa: bbva-debito se prueba antes que bbva porque ambos
+// mencionan "BBVA" y el de crédito es el más genérico de los dos.
+export const PARSERS = [bbvaDebito, bbva, nu, mercadopago];
 
 export function parserFor(bankId) {
   return PARSERS.find((p) => p.BANK_ID === bankId) || null;
 }
 
-/** Adivina el banco a partir del contenido. Devuelve null si no está seguro. */
+/**
+ * Adivina el banco a partir del contenido.
+ * Si más de uno dice reconocerlo, gana el primero de `PARSERS` (el más
+ * específico), en vez de rendirse: los dos formatos de BBVA se parecen.
+ */
 export function detectBank(lines) {
-  const hits = PARSERS.filter((p) => p.detect(lines));
-  return hits.length === 1 ? hits[0].BANK_ID : null;
+  const hit = PARSERS.find((p) => p.detect(lines));
+  return hit ? hit.BANK_ID : null;
 }
 
 /**
  * Procesa un PDF completo en el navegador.
  * @param {ArrayBuffer} buffer  contenido del archivo (nunca sale del dispositivo)
  * @param {string|null} bankId  fuerza un banco; si es null se autodetecta
+ * @param {object} options      se pasa al parser (p. ej. holderNames)
  */
-export async function parseStatement(buffer, bankId = null) {
+export async function parseStatement(buffer, bankId = null, options = {}) {
   const lines = await pdfToLines(buffer);
   if (!lines.length) {
     throw new Error(
@@ -38,7 +47,7 @@ export async function parseStatement(buffer, bankId = null) {
   const parser = parserFor(id);
   if (!parser) throw new Error(`No hay parser para "${id}".`);
 
-  const result = parser.parse(lines);
+  const result = parser.parse(lines, options);
   result.lineCount = lines.length;
   if (!result.transactions.length) {
     result.warnings.push(

@@ -61,8 +61,9 @@ export async function deleteRule(id) {
 
 // ---------------------------------------------------------------- movimientos
 const TX_COLUMNS =
-  'id,account_id,category_id,import_id,occurred_on,posted_on,description,amount,' +
-  'kind,note,source,categorized_by,original_currency,original_amount,fx_rate,fingerprint';
+  'id,account_id,counter_account_id,category_id,import_id,occurred_on,posted_on,' +
+  'description,amount,kind,transfer_reason,note,source,categorized_by,' +
+  'original_currency,original_amount,fx_rate,fingerprint';
 
 /**
  * Trae movimientos. Supabase corta en 1000 filas por default, así que
@@ -154,6 +155,25 @@ export async function undoImport(importId) {
   if (e1) throw e1;
   const { error: e2 } = await sb().from('imports').delete().eq('id', importId);
   if (e2) throw e2;
+}
+
+// ---------------------------------------------------------------- ajustes
+export async function fetchSettings() {
+  const rows = unwrap(await sb().from('settings').select('*').limit(1));
+  return rows[0] ?? null;
+}
+
+export async function saveSettings(patch) {
+  const current = await fetchSettings();
+  if (current) {
+    return unwrap(await sb().from('settings').update(patch)
+      .eq('user_id', current.user_id).select().single());
+  }
+  return unwrap(await sb().from('settings').insert(patch).select().single());
+}
+
+export async function updateAccount(id, patch) {
+  return unwrap(await sb().from('accounts').update(patch).eq('id', id).select().single());
 }
 
 // ---------------------------------------------------------------- semilla
