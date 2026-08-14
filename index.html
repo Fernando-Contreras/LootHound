@@ -5,8 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LootHound — finanzas personales</title>
   <meta name="description" content="Tracker de gastos e ingresos. Importa estados de cuenta en PDF sin que el archivo salga de tu dispositivo.">
-  <meta name="color-scheme" content="light dark">
-  <link rel="stylesheet" href="./css/styles.css">
+  <meta name="color-scheme" content="dark light">
+  <!-- El ?v= se sube a mano cuando cambia el diseño: GitHub Pages cachea los
+       archivos 10 minutos y sin esto habría que recargar con Ctrl+Shift+R. -->
+  <link rel="stylesheet" href="./css/styles.css?v=2">
+  <script>
+    // Se aplica antes de pintar para que no haya un destello blanco al cargar.
+    try {
+      if (localStorage.getItem('loothound.theme') === 'light') {
+        document.documentElement.dataset.theme = 'light';
+      }
+    } catch (e) { /* localStorage bloqueado: se queda en oscuro */ }
+  </script>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐕</text></svg>">
 </head>
 <body>

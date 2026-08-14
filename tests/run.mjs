@@ -238,6 +238,48 @@ group('reglas (categorize.js)', () => {
     cat.ruleExists(reglas, 'oxxo'), true);
 });
 
+// ------------------------------------------- reglas hacia atrás
+group('las reglas nuevas aplican a lo que ya tenías', () => {
+  // El caso real: importas Mercado Pago, salen 30 "Ganancia" sin categoría,
+  // creas la regla Ganancia → Rendimientos... y no pasa nada, porque las
+  // reglas sólo corrían al importar.
+  const guardados = [
+    { id: 't1', description: 'Ganancia', category_id: null, categorized_by: 'none' },
+    { id: 't2', description: 'Ganancia', category_id: null, categorized_by: 'none' },
+    { id: 't3', description: 'Ganancia Beneficio de Mercado Pago', category_id: null, categorized_by: 'none' },
+    { id: 't4', description: 'OXXO COXUMEL', category_id: 'super', categorized_by: 'rule' },
+    // éste lo acomodaste tú a mano: no se debe tocar
+    { id: 't5', description: 'Ganancia', category_id: 'otra-cosa', categorized_by: 'user' },
+  ];
+  const conRegla = [
+    { id: 'r1', pattern: 'Ganancia', match_type: 'contains', category_id: 'rendimientos', priority: 50, enabled: true },
+    { id: 'r2', pattern: 'OXXO', match_type: 'contains', category_id: 'super', priority: 100, enabled: true },
+  ];
+
+  const plan = cat.recategorizePlan(guardados, conRegla);
+  eq('acomoda las que estaban sin categoría', plan.length, 3);
+  eq('todas van a la categoría de la regla',
+    [...new Set(plan.map(c => c.category_id))], ['rendimientos']);
+  eq('no toca lo que ya estaba bien', plan.some(c => c.id === 't4'), false);
+  eq('no pisa tu decisión manual', plan.some(c => c.id === 't5'), false);
+
+  // ...salvo que lo pidas explícitamente
+  const forzado = cat.recategorizePlan(guardados, conRegla, { includeUserSet: true });
+  eq('con includeUserSet sí lo pisa', forzado.some(c => c.id === 't5'), true);
+
+  // Correr dos veces seguidas no debe hacer nada la segunda vez
+  const yaAplicado = guardados.map(t => {
+    const c = plan.find(p => p.id === t.id);
+    return c ? { ...t, category_id: c.category_id, categorized_by: 'rule' } : t;
+  });
+  eq('es idempotente', cat.recategorizePlan(yaAplicado, conRegla).length, 0);
+
+  // Sin regla que aplique no se despoja de lo que ya tenía
+  const sinReglas = cat.recategorizePlan(
+    [{ id: 'x', description: 'RARO', category_id: 'algo', categorized_by: 'rule' }], []);
+  eq('no borra categorías existentes', sinReglas.length, 0);
+});
+
 // ------------------------------------------------- transferencias propias
 group('transferencias entre cuentas propias (identity.js)', () => {
   const YO = ['Juan Fernando Salinas Contreras'];

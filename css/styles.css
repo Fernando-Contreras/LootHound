@@ -3,7 +3,31 @@
    Tokens en :root, tema claro y oscuro automáticos.
    =========================================================================== */
 
+/* Oscuro por defecto, a propósito: la app se usa de noche y mirar una
+   pantalla blanca cansa. El claro sólo aparece si se pide explícitamente,
+   así que no depende de cómo esté configurado el sistema operativo. */
 :root {
+  --bg: #0e1015;
+  --surface: #171a21;
+  --surface-2: #1e222b;
+  --text: #e8eaef;
+  --muted: #9aa3b2;
+  --line: #2a2f3a;
+  --accent: #9b7dff;
+  --accent-soft: #241d3d;
+  --in: #34d399;
+  --out: #f87171;
+  --warn: #fbbf24;
+  --warn-soft: #2b2415;
+  --info-soft: #16202e;
+  --ok-soft: #13251c;
+  --danger: #f87171;
+  --radius: 12px;
+  --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 4px 14px rgb(0 0 0 / 30%);
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+:root[data-theme="light"] {
   --bg: #f6f7f9;
   --surface: #ffffff;
   --surface-2: #f0f2f5;
@@ -19,30 +43,7 @@
   --info-soft: #eaf2fd;
   --ok-soft: #e8f6ee;
   --danger: #c0271f;
-  --radius: 12px;
   --shadow: 0 1px 2px rgb(16 18 24 / 6%), 0 4px 14px rgb(16 18 24 / 5%);
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0e1015;
-    --surface: #171a21;
-    --surface-2: #1e222b;
-    --text: #e8eaef;
-    --muted: #9aa3b2;
-    --line: #2a2f3a;
-    --accent: #9b7dff;
-    --accent-soft: #241d3d;
-    --in: #34d399;
-    --out: #f87171;
-    --warn: #fbbf24;
-    --warn-soft: #2b2415;
-    --info-soft: #16202e;
-    --ok-soft: #13251c;
-    --danger: #f87171;
-    --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 4px 14px rgb(0 0 0 / 30%);
-  }
 }
 
 * { box-sizing: border-box; }
@@ -109,7 +110,9 @@ code { font-family: var(--mono); font-size: .9em; }
   padding: 1.1rem;
   box-shadow: var(--shadow);
 }
-.card__head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: .75rem; }
+.card__head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: .75rem; flex-wrap: wrap; }
+.card__actions { display: flex; align-items: center; gap: .6rem; }
+.modal p { white-space: pre-line; }
 .card--error { border-color: var(--out); }
 
 /* ------------------------------------------------------------------- login */

@@ -135,6 +135,39 @@ export async function insertTransactions(rows, { batchSize = 200, onProgress } =
   return { inserted, skipped };
 }
 
+/**
+ * Recategoriza movimientos ya guardados.
+ *
+ * Se agrupan por categoría destino para mandar UNA petición por categoría en
+ * vez de una por movimiento: recategorizar 500 renglones son ~8 requests, no
+ * 500.
+ *
+ * @param {Array<{id:string, category_id:string|null}>} updates
+ */
+export async function recategorize(updates) {
+  const porCategoria = new Map();
+  for (const u of updates) {
+    const key = u.category_id ?? '__null__';
+    if (!porCategoria.has(key)) porCategoria.set(key, []);
+    porCategoria.get(key).push(u.id);
+  }
+
+  let changed = 0;
+  for (const [key, ids] of porCategoria) {
+    const category_id = key === '__null__' ? null : key;
+    // `in` acepta listas grandes, pero se parte para no armar URLs enormes
+    for (let i = 0; i < ids.length; i += 200) {
+      const chunk = ids.slice(i, i + 200);
+      const data = unwrap(await sb().from('transactions')
+        .update({ category_id, categorized_by: category_id ? 'rule' : 'none' })
+        .in('id', chunk)
+        .select('id'));
+      changed += data.length;
+    }
+  }
+  return changed;
+}
+
 // ---------------------------------------------------------------- importaciones
 export async function createImport(imp) {
   return unwrap(await sb().from('imports').insert(imp).select().single());

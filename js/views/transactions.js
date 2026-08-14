@@ -3,7 +3,7 @@
 import { el, mount, toast, confirmDialog, withBusy } from '../dom.js';
 import * as fin from '../finance.js';
 import * as store from '../store.js';
-import { suggestRule, ruleExists, matchRule } from '../categorize.js';
+import { suggestRule, ruleExists, matchRule, recategorizePlan } from '../categorize.js';
 import { fingerprint } from '../dedupe.js';
 
 export function renderTransactions(root, state, actions) {
@@ -271,13 +271,21 @@ async function changeCategory(tx, categoryId, state, actions) {
   if (!ok) return;
 
   try {
-    await store.createRule({
+    const nueva = await store.createRule({
       pattern: suggestion.pattern,
       match_type: suggestion.match_type,
       category_id: categoryId,
       priority: 50, // las que hace el usuario ganan sobre las de fábrica
     });
-    toast(`Regla creada: "${suggestion.pattern}" → ${catName}`, 'ok');
+
+    // Aplicar la regla también hacia atrás: si acabas de decir que "Ganancia"
+    // es Rendimientos, las 30 Ganancias que ya tenías deben acomodarse solas.
+    const cambios = recategorizePlan(state.transactions, [nueva, ...state.rules]);
+    const n = cambios.length ? await store.recategorize(cambios) : 0;
+
+    toast(n
+      ? `Regla creada y aplicada a ${n} movimiento${n === 1 ? '' : 's'} más.`
+      : `Regla creada: "${suggestion.pattern}" → ${catName}`, 'ok', 5000);
     await actions.reload();
   } catch (err) {
     toast(store.dbErrorMessage(err), 'error');

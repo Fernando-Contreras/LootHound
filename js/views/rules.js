@@ -2,7 +2,7 @@
 
 import { el, mount, toast, confirmDialog, withBusy } from '../dom.js';
 import * as store from '../store.js';
-import { previewRule } from '../categorize.js';
+import { previewRule, recategorizePlan } from '../categorize.js';
 import * as fin from '../finance.js';
 
 export function renderRules(root, state, actions) {
@@ -124,15 +124,24 @@ function newRuleForm(state, actions) {
     const btn = form.querySelector('button[type=submit]');
     await withBusy(btn, async () => {
       try {
-        await store.createRule({
+        const nueva = await store.createRule({
           pattern: form.pattern.value.trim(),
           match_type: form.match_type.value,
           category_id: form.category_id.value,
           account_id: form.account_id.value || null,
           priority: 50,
         });
-        toast('Regla creada.', 'ok');
         form.reset();
+
+        // Una regla nueva sirve de poco si sólo aplica a lo que importes
+        // después: casi siempre te das cuenta de que falta viendo el historial.
+        const cambios = recategorizePlan(state.transactions, [nueva, ...state.rules]);
+        if (cambios.length) {
+          const n = await store.recategorize(cambios);
+          toast(`Regla creada y aplicada a ${n} movimiento${n === 1 ? '' : 's'} que ya tenías.`, 'ok', 6000);
+        } else {
+          toast('Regla creada. No había movimientos que coincidieran.', 'ok');
+        }
         await actions.reload();
       } catch (err) {
         toast(err?.code === '23505'
@@ -151,11 +160,26 @@ function rulesTable(state, actions) {
     return el('section', { class: 'card' }, el('p', { class: 'muted' }, 'Aún no hay reglas.'));
   }
 
+  const sinCategoria = state.transactions.filter(
+    (t) => !t.category_id && t.categorized_by !== 'user').length;
+
   return el('section', { class: 'card' },
     el('div', { class: 'card__head' },
       el('h3', {}, 'Reglas'),
-      el('span', { class: 'muted' }, `${state.rules.length}`),
+      el('div', { class: 'card__actions' },
+        el('span', { class: 'muted' }, `${state.rules.length} reglas`),
+        el('button', {
+          class: 'btn btn--ghost btn--sm',
+          title: 'Vuelve a pasar todas las reglas sobre tu historial',
+          onclick: (e) => reapplyAll(e.target, state, actions),
+        }, 'Reaplicar a todo'),
+      ),
     ),
+
+    sinCategoria > 0 && el('p', { class: 'note' },
+      `Tienes ${sinCategoria} movimiento${sinCategoria === 1 ? '' : 's'} sin categoría. ` +
+      'Crea una regla o corrígelos desde Movimientos.'),
+
     el('div', { class: 'table-wrap' },
       el('table', { class: 'table' },
         el('thead', {}, el('tr', {},
@@ -192,6 +216,39 @@ function rulesTable(state, actions) {
       ),
     ),
   );
+}
+
+/**
+ * Reaplica TODAS las reglas al historial completo. Útil después de editar
+ * varias reglas seguidas, o tras cambiar la prioridad de alguna.
+ */
+async function reapplyAll(button, state, actions) {
+  const cambios = recategorizePlan(state.transactions, state.rules);
+  if (!cambios.length) {
+    return toast('Nada que cambiar: todo ya está como dicen tus reglas.', 'ok');
+  }
+
+  const muestra = cambios.slice(0, 4)
+    .map((c) => `· ${c.description.slice(0, 40)} → ${state.categoryMap.get(c.to)?.name}`)
+    .join('\n');
+
+  const ok = await confirmDialog(
+    `¿Recategorizar ${cambios.length} movimiento${cambios.length === 1 ? '' : 's'}?`,
+    `${muestra}${cambios.length > 4 ? `\n...y ${cambios.length - 4} más` : ''}\n\n` +
+    'No se toca lo que hayas categorizado a mano.',
+    { okLabel: 'Aplicar' },
+  );
+  if (!ok) return;
+
+  await withBusy(button, async () => {
+    try {
+      const n = await store.recategorize(cambios);
+      toast(`${n} movimiento${n === 1 ? '' : 's'} recategorizado${n === 1 ? '' : 's'}.`, 'ok');
+      await actions.reload();
+    } catch (err) {
+      toast(store.dbErrorMessage(err), 'error');
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------

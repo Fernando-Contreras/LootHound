@@ -11,6 +11,22 @@ import { renderTransactions } from './views/transactions.js';
 import { renderImport } from './views/import.js';
 import { renderRules } from './views/rules.js';
 
+// ---------------------------------------------------------------------------
+// Tema. Oscuro por defecto; el claro se guarda sólo si se pide.
+const THEME_KEY = 'loothound.theme';
+
+function currentTheme() {
+  return document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+}
+
+function toggleTheme() {
+  const next = currentTheme() === 'light' ? 'dark' : 'light';
+  if (next === 'light') document.documentElement.dataset.theme = 'light';
+  else delete document.documentElement.dataset.theme;
+  try { localStorage.setItem(THEME_KEY, next); } catch { /* sin persistir */ }
+  return next;
+}
+
 const state = {
   session: null,
   transactions: [],
@@ -96,6 +112,11 @@ function render() {
       ),
       el('div', { class: 'topbar__right' },
         el('span', { class: 'muted topbar__email' }, state.session.user.email),
+        el('button', {
+          class: 'iconbtn', title: 'Cambiar entre claro y oscuro',
+          'aria-label': 'Cambiar tema',
+          onclick: (e) => { e.target.textContent = toggleTheme() === 'light' ? '☾' : '☀'; },
+        }, currentTheme() === 'light' ? '☾' : '☀'),
         el('button', {
           class: 'btn btn--ghost btn--sm',
           onclick: async () => { await signOut(); },

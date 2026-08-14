@@ -119,3 +119,49 @@ export function ruleExists(rules, pattern, matchType = 'contains', accountId = n
 export function previewRule(rule, txs) {
   return txs.filter((tx) => testRule(rule, normalizeDescription(tx.description), tx.description));
 }
+
+/**
+ * Recalcula la categoría de movimientos YA GUARDADOS con el juego de reglas
+ * actual, y devuelve sólo los que cambiarían.
+ *
+ * Una regla nueva no sirve de nada si sólo aplica a lo que importes después:
+ * lo normal es darse cuenta de que falta una regla justo al ver el historial.
+ *
+ * Qué NO se toca:
+ *   - lo que categorizaste a mano (`categorized_by === 'user'`): tu decisión
+ *     gana siempre sobre una regla
+ *   - lo que ya está en la categoría correcta
+ *
+ * @param {Array} txs      movimientos guardados
+ * @param {Array} rules    reglas del usuario
+ * @param {object} options
+ * @param {boolean} options.includeUserSet  forzar también sobre lo manual
+ * @param {string|null} options.fallbackCategoryId
+ * @returns {Array<{id, category_id, description, from, to}>}
+ */
+export function recategorizePlan(txs, rules, {
+  includeUserSet = false,
+  fallbackCategoryId = null,
+} = {}) {
+  const cambios = [];
+  for (const tx of txs) {
+    if (!includeUserSet && tx.categorized_by === 'user') continue;
+
+    const hit = matchRule(tx, rules);
+    const nueva = hit ? hit.category_id : (tx.category_id ?? fallbackCategoryId);
+
+    // Sin regla que aplique, no se despoja de la categoría que ya tenía:
+    // borrar trabajo previo sería peor que no hacer nada.
+    if (!hit) continue;
+    if (nueva === tx.category_id) continue;
+
+    cambios.push({
+      id: tx.id,
+      category_id: nueva,
+      description: tx.description,
+      from: tx.category_id ?? null,
+      to: nueva,
+    });
+  }
+  return cambios;
+}
