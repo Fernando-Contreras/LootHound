@@ -1,7 +1,7 @@
 // Pantallas de configuración inicial y de login.
 
 import { el, mount, toast, withBusy } from '../dom.js';
-import { getConfig, saveConfig, looksLikeServiceKey } from '../config.js';
+import { getConfig, saveConfig, looksLikeSecretKey, looksLikePublishableKey } from '../config.js';
 import { resetClient, signIn, signUp, resetPassword, authErrorMessage } from '../supabase.js';
 
 /** Primera pantalla si no hay URL/anon key configuradas. */
@@ -18,15 +18,17 @@ export function renderSetup(root, onDone) {
         placeholder: 'https://xxxxxxxx.supabase.co', autocomplete: 'off',
       })),
 
-    el('label', {}, 'Anon key (public)',
+    el('label', {}, 'Llave publicable',
       el('input', {
         name: 'anonKey', type: 'text', required: true,
-        placeholder: 'eyJhbGciOi...', autocomplete: 'off',
+        placeholder: 'sb_publishable_...', autocomplete: 'off',
       })),
 
     el('p', { class: 'note' },
-      'Usa la llave ', el('strong', {}, 'anon / public'), ', nunca la ',
-      el('strong', {}, 'service_role'), ': esa se salta RLS y daría acceso a todo.'),
+      'En Supabase: ', el('strong', {}, 'Project Settings → API Keys'), '. Usa la ',
+      el('strong', {}, 'publishable'), ' (o la ', el('strong', {}, 'anon'),
+      ' si tu proyecto es de antes). Nunca la ', el('strong', {}, 'secret'),
+      ' ni la ', el('strong', {}, 'service_role'), ': ésas se saltan RLS.'),
 
     el('button', { class: 'btn btn--primary', type: 'submit' }, 'Conectar'),
   );
@@ -40,8 +42,13 @@ export function renderSetup(root, onDone) {
       toast('Esa URL no parece de Supabase. Debe verse como https://xxxx.supabase.co', 'error');
       return;
     }
-    if (looksLikeServiceKey(anonKey)) {
-      toast('Esa es la service_role key: se salta RLS. Usa la anon/public.', 'error', 8000);
+    if (looksLikeSecretKey(anonKey)) {
+      toast('Esa llave es secreta y se salta RLS. Usa la publishable / anon.', 'error', 9000);
+      return;
+    }
+    if (!looksLikePublishableKey(anonKey)) {
+      toast('Esa llave no parece de Supabase. Debe empezar con "sb_publishable_" o "eyJ".',
+        'error', 8000);
       return;
     }
     saveConfig({ url, anonKey });
