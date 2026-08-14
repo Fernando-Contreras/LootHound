@@ -11,6 +11,8 @@ import * as fin from '../js/finance.js';
 import * as dedupe from '../js/dedupe.js';
 import * as cat from '../js/categorize.js';
 import * as id from '../js/parsers/identity.js';
+import * as bbvaDebito from '../js/parsers/bbva-debito.js';
+import * as imp from '../js/views/import.js';
 
 import * as fxBbva from './fixtures/bbva-sintetico.js';
 import * as fxNu from './fixtures/nu-sintetico.js';
@@ -313,6 +315,61 @@ group('conciliación de efectivo (finance.js)', () => {
   const s = fin.summarize(txs);
   eq('el retiro no cuenta como gasto', s.expense, 1370);
   eq('el retiro no cuenta como ingreso', s.income, 0);
+});
+
+// ------------------------------------------------- limites de la base
+group('lo que se manda a la base cumple las restricciones', () => {
+  // Un movimiento puede empezar al final de una pagina y seguir en la
+  // siguiente. El parser pega renglones hasta encontrar la proxima fecha, asi
+  // que sin filtrar el membrete se traga el pie de pagina y el encabezado
+  // completos -- incluido el numero de cuenta -- y la base rechaza TODA la
+  // importacion por pasarse de 200 caracteres.
+  const lines = [
+    { page: 1, text: 'Periodo DEL 01/07/2026 AL 31/07/2026', items: [] },
+    { page: 1, text: 'Detalle de Movimientos Realizados', items: [] },
+    { page: 1, text: 'OPER LIQ DESCRIPCIÓN REFERENCIA CARGOS ABONOS OPERACIÓN LIQUIDACIÓN',
+      items: [
+        { x0: 82, x1: 139, str: 'DESCRIPCIÓN' }, { x0: 216, x1: 269, str: 'REFERENCIA' },
+        { x0: 371, x1: 406, str: 'CARGOS' }, { x0: 428, x1: 463, str: 'ABONOS' },
+        { x0: 477, x1: 526, str: 'OPERACIÓN' }, { x0: 545, x1: 598, str: 'LIQUIDACIÓN' },
+      ] },
+    // movimiento al pie de la pagina 1
+    { page: 1, text: '09/JUL 09/JUL SPEI RECIBIDO Mercado Pago 4,000.00',
+      items: [
+        { x0: 21, x1: 50, str: '09/JUL' }, { x0: 56, x1: 85, str: '09/JUL' },
+        { x0: 85, x1: 200, str: 'SPEI RECIBIDO Mercado Pago' },
+        { x0: 433, x1: 463, str: '4,000.00' },
+      ] },
+    // ...y todo el membrete que NO debe acabar en la descripcion
+    { page: 1, text: 'BBVA MEXICO, S.A., INSTITUCION DE BANCA MULTIPLE, GRUPO FINANCIERO BBVA MEXICO', items: [] },
+    { page: 1, text: 'Av. Paseo de la Reforma 510, Col. Juárez, Alcaldía Cuauhtémoc, C.P. 06600, Ciudad de México', items: [] },
+    { page: 2, text: 'Estado de Cuenta', items: [] },
+    { page: 2, text: 'LIBRETON 2.0', items: [] },
+    { page: 2, text: 'PAGINA 2 / 5', items: [] },
+    { page: 2, text: 'No. de Cuenta 0192649233', items: [] },
+    { page: 2, text: 'No. de Cliente A8199334', items: [] },
+    { page: 2, text: 'FECHA SALDO', items: [] },
+    // esta linea SI pertenece al movimiento: es la contraparte
+    { page: 2, text: 'JUAN FERNANDO SALINAS CONTRERAS', items: [] },
+    { page: 2, text: 'TOTAL IMPORTE CARGOS 0.00', items: [] },
+    { page: 2, text: 'TOTAL IMPORTE ABONOS 4,000.00', items: [] },
+  ];
+
+  const r = bbvaDebito.parse(lines, { holderNames: ['Juan Fernando Salinas Contreras'] });
+  const tx = r.transactions[0];
+
+  eq('lee el movimiento', r.transactions.length, 1);
+  eq('cabe en la columna', tx.description.length <= 200, true);
+  eq('no se traga el membrete', /BBVA MEXICO|LIBRETON|PAGINA|Paseo de la Reforma/.test(tx.description), false);
+  eq('no filtra el número de cuenta', /0192649233|A8199334/.test(tx.description), false);
+  eq('sí conserva la contraparte', /SALINAS CONTRERAS/.test(tx.description), true);
+  eq('y por eso lo marca como transferencia', tx.kind, 'transfer');
+
+  // Red de seguridad final: pase lo que pase, nunca sale algo que la base rechace.
+  eq('recorta lo demasiado largo', imp.clampDescription('x'.repeat(500)).length, 200);
+  eq('rellena lo vacío', imp.clampDescription('   '), 'Movimiento');
+  eq('deja intacto lo normal', imp.clampDescription('  OXXO   COXUMEL  '), 'OXXO COXUMEL');
+  eq('tolera null', imp.clampDescription(null), 'Movimiento');
 });
 
 // ---------------------------------------------------------------------- run

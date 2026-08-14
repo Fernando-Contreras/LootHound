@@ -192,7 +192,16 @@ export function dbErrorMessage(err) {
   const code = err?.code;
   if (code === '23505') return 'Ese movimiento ya estaba registrado.';
   if (code === '23503') return 'La cuenta o categoría ya no existe.';
-  if (code === '23514') return 'Algún dato no cumple las reglas (¿monto en cero o negativo?).';
+  if (code === '23514') {
+    // Postgres dice cuál restricción falló; traducirla ahorra adivinar.
+    const c = String(err?.details || err?.message || '');
+    if (/description/i.test(c)) return 'Una descripción quedó vacía o demasiado larga (máx. 200 caracteres).';
+    if (/amount/i.test(c)) return 'Hay un movimiento con monto en cero o negativo.';
+    if (/counter_account/i.test(c)) return 'Una transferencia apunta a la misma cuenta de origen.';
+    if (/fx_fields/i.test(c)) return 'A un movimiento en moneda extranjera le falta el monto original.';
+    if (/kind|categorized_by|source/i.test(c)) return 'Un movimiento tiene un tipo no válido.';
+    return `Un dato no cumple las reglas de la base: ${c.slice(0, 160)}`;
+  }
   if (code === '42501' || /row-level security/i.test(m)) {
     return 'La base rechazó la operación (RLS). ¿Sigue activa tu sesión?';
   }

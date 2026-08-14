@@ -39,6 +39,36 @@ import { classifyMovement } from './identity.js';
 import { buildCheck } from './bbva.js';
 
 const RE_ROW_START = /^(\d{2})\/([A-ZÁÉÍÓÚ]{3})\s+(\d{2})\/([A-ZÁÉÍÓÚ]{3})\s+(.*)$/i;
+
+/**
+ * Membrete de página: pie de una hoja y encabezado de la siguiente.
+ *
+ * Importa filtrarlo porque un movimiento puede empezar al final de una página
+ * y su contraparte venir hasta la siguiente. El parser sigue pegando renglones
+ * hasta encontrar la próxima fecha, así que sin este filtro se traga el
+ * membrete completo — incluido tu número de cuenta — y arma descripciones de
+ * cientos de caracteres que la base rechaza.
+ */
+const RE_PAGE_FURNITURE = new RegExp([
+  '^BBVA MEXICO',
+  '^Av\\. Paseo de la Reforma',
+  '^Estado de Cuenta',
+  '^LIBRETON',
+  '^PAGINA\\s+\\d+\\s*/\\s*\\d+',
+  '^No\\.\\s*de\\s*(Cuenta|Cliente)',
+  '^FECHA\\b',
+  '^SALDO\\b',
+  '^OPER\\b',
+  '^Detalle de Movimientos',
+  '^Total de Movimientos',
+  '^Estado de cuenta de Apartados',
+  '^La GAT',
+  '^R\\.F\\.C',
+  '^www\\.bbva',
+].join('|'), 'i');
+
+/** Tope duro de la descripción; la columna de la base acepta 200. */
+const MAX_DESC = 200;
 const RE_AMOUNT = /^-?[\d,]+\.\d{2}$/;
 const RE_PERIODO = /Periodo\s+DEL\s+(\d{2})\/(\d{2})\/(\d{4})\s+AL\s+(\d{2})\/(\d{2})\/(\d{4})/i;
 const RE_TOTAL = /^TOTAL IMPORTE (CARGOS|ABONOS)\s+([\d,]+\.\d{2})/i;
@@ -100,7 +130,11 @@ export function parse(lines, options = {}) {
 
   const flush = () => {
     if (!current) return;
-    const description = tidyDescription(current.parts.join(' '));
+    let description = tidyDescription(current.parts.join(' '));
+    if (description.length > MAX_DESC) {
+      // Red de seguridad: mejor recortar que reventar la importación entera.
+      description = description.slice(0, MAX_DESC - 1).trim() + '…';
+    }
     const { kind, reason, internal } = classifyMovement({
       description,
       direction: current.direction,
@@ -199,6 +233,7 @@ export function parse(lines, options = {}) {
 
     // renglón de continuación: sigue describiendo el movimiento abierto
     if (current) {
+      if (RE_PAGE_FURNITURE.test(t)) continue;
       // se ignoran los códigos de referencia (puros dígitos) para no ensuciar
       const meaningful = t.replace(/\b\d{8,}\b/g, ' ').replace(/\s+/g, ' ').trim();
       if (meaningful && !/^\d+$/.test(meaningful)) current.parts.push(meaningful);

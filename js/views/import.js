@@ -19,6 +19,15 @@ import * as store from '../store.js';
 
 let pending = null; // { bank, transactions, period, statement, check, file }
 
+/** La columna `description` de la base acepta 200 caracteres. */
+const MAX_DESC = 200;
+
+export function clampDescription(text) {
+  const s = String(text ?? '').trim().replace(/\s+/g, ' ');
+  if (!s) return 'Movimiento';           // la base tampoco acepta vacío
+  return s.length <= MAX_DESC ? s : `${s.slice(0, MAX_DESC - 1).trim()}…`;
+}
+
 export function renderImport(root, state, actions) {
   mount(root,
     el('div', { class: 'view' },
@@ -118,6 +127,28 @@ async function handleFile(file, state, actions) {
     applyRules(result.transactions, state.rules, {
       fallbackCategoryId: state.categoryByName.get('Sin categoría')?.id ?? null,
     });
+
+    // Las transferencias se categorizan por el MOTIVO que detectó el parser,
+    // no por palabra clave. Cada banco las escribe distinto ("PAGO TARJETA DE
+    // CREDITO", "BMOVIL.PAGO TDC", "RETIRO SIN TARJETA"...), pero el motivo ya
+    // viene normalizado, así que no hay que mantener una regla por variante.
+    const catFor = (name) => state.categoryByName.get(name)?.id ?? null;
+    const CATEGORIA_POR_MOTIVO = {
+      'retiro-efectivo': catFor('Retiro de efectivo'),
+      'pago-tarjeta': catFor('Transferencia'),
+      'mismo-titular': catFor('Transferencia'),
+      'cuenta-propia': catFor('Transferencia'),
+      'deposito-propio': catFor('Transferencia'),
+      'cajita': catFor('Transferencia'),
+      'devolucion': catFor('Otros ingresos'),
+    };
+    for (const tx of result.transactions) {
+      const auto = CATEGORIA_POR_MOTIVO[tx.transfer_reason];
+      if (auto) {
+        tx.category_id = auto;
+        tx.categorized_by = 'rule';
+      }
+    }
 
     // Duplicados: exactos (huella) y parecidos (fuzzy)
     const existing = await store.fetchFingerprintIndex();
@@ -329,7 +360,10 @@ async function doImport(button, host, state, actions) {
         import_id: importRecord.id,
         occurred_on: t.occurred_on,
         posted_on: t.posted_on || null,
-        description: t.description,
+        // Último filtro antes de la base: si un parser se pasa de largo,
+        // preferimos recortar a que la base rechace TODA la importación con
+        // un error que no dice qué renglón la causó.
+        description: clampDescription(t.description),
         amount: t.amount,
         kind: t.kind,
         source: 'pdf_import',
