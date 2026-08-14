@@ -77,13 +77,22 @@ group('parser Nu', () => {
   eq('periodo', r.period, e.period);
   eq('total gastos', totalOf(reales, 'expense'), e.expense);
   eq('total depósitos', totalOf(reales, 'income'), e.income);
-  eq('cajitas marcadas como transfer',
+  eq('cajitas y pagos marcados como transfer',
     reales.filter(t => t.kind === 'transfer').length, e.transfers);
   eq('cuadra contra los totales del PDF', r.check.ok, true);
   eq('saldo final reconstruido', r.check.balance.computed, e.saldoFinal);
 
+  // El pago de tarjeta NO es gasto (si no, se contaría doble contra BBVA)
+  // pero SÍ cuenta como salida contra el total que declara Nu.
+  const pago = reales.find(t => /Pago de tarjeta/i.test(t.description));
+  eq('el pago de tarjeta es transfer', pago?.kind, 'transfer');
+  eq('el pago de tarjeta sí sale de la cuenta', pago?._leavesAccount, true);
+  eq('la Cajita no sale de la cuenta',
+    reales.find(t => /Cajita/i.test(t.description))?._leavesAccount, undefined);
+  eq('el total de salidas incluye el pago', r.check.rows[0].computed, e.outflow);
+
   // la sección espejo de cajitas no debe importarse
-  eq('ignora la sección de cajitas', reales.length, 5);
+  eq('ignora la sección de cajitas', reales.length, e.count);
 
   // limpia " Compra" y el "*" del final
   eq('limpia la descripción',

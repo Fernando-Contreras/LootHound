@@ -34,6 +34,17 @@ import { buildCheck } from './bbva.js';
 const RE_TX = /^(\d{2})\s+([A-Za-zÁÉÍÓÚáéíóú]{3})\s+(\d{4})\s+(.+?)\s+([+-])\$([\d,]+\.\d{2})$/;
 const RE_FX = /^USD\s*1(?:\.00)?\s*=\s*MXN\s*([\d,]+\.\d+)\s+USD\s*([\d,]+(?:\.\d+)?)$/i;
 const RE_CAJITA = /^(Dep[oó]sito en|Retiro de)\s+Cajita/i;
+
+// Salidas de dinero que NO son gasto: pagar una tarjeta o mandarte dinero a ti
+// mismo. Sin esto se contarían doble — el pago sale como gasto en Nu y las
+// compras de esa tarjeta salen como gasto otra vez en el estado de BBVA.
+//
+// OJO: el estado de cuenta con el que se verificó el parser no traía ningún
+// pago de tarjeta, así que estos patrones son una heurística, no algo
+// confirmado contra el formato real. El preview permite corregir el tipo de
+// cada renglón antes de importar; si ves que un pago tuyo no cae aquí, agrega
+// su texto a esta lista.
+const RE_TRANSFER_OUT = /pago (de |a )?(tu )?tarjeta|pago tdc|tarjeta de cr[eé]dito|spei|transferencia (enviada|a terceros|entre cuentas)|env[ií]o de dinero/i;
 const RE_PERIODO = /Periodo:\s*del\s*(\d{2})\s*al\s*(\d{2})\s*([A-Za-zÁÉÍÓÚáéíóú]{3})\s*(\d{4})/i;
 
 const RESUMEN = {
@@ -108,8 +119,20 @@ export function parse(lines) {
     if (!mm) continue;
 
     const description = rawDesc.trim();
+
+    // Dos clases de transferencia, y la diferencia importa para validar:
+    //   - Cajita: el dinero NO sale de la cuenta, sólo se aparta. Nu lo excluye
+    //     de su total de "Gastos".
+    //   - pago de tarjeta / SPEI: el dinero SÍ sale de la cuenta, así que Nu
+    //     SÍ lo cuenta en "Gastos" (si no, su saldo no cerraría).
+    // Ambas son `transfer` para el balance de la app, pero sólo la segunda
+    // debe sumarse al comparar contra el total impreso.
     const isCajita = RE_CAJITA.test(description);
-    const kind = isCajita ? 'transfer' : (sign === '-' ? 'expense' : 'income');
+    const isExternalTransfer = !isCajita && RE_TRANSFER_OUT.test(description) && sign === '-';
+
+    let kind;
+    if (isCajita || isExternalTransfer) kind = 'transfer';
+    else kind = sign === '-' ? 'expense' : 'income';
 
     const tx = {
       bank: BANK_ID,
@@ -122,6 +145,8 @@ export function parse(lines) {
       raw_line: t,
       page: line.page,
     };
+    // marca interna: no se guarda en la base, sólo sirve para la validación
+    if (isExternalTransfer) tx._leavesAccount = true;
 
     if (!Number.isFinite(tx.amount)) {
       warnings.push(`No se pudo leer bien este renglón: "${t}"`);
@@ -149,19 +174,23 @@ export function parse(lines) {
     });
   }
 
-  const sumExpense = round2(sum(transactions.filter((t) => t.kind === 'expense')));
+  // Todo lo que sale de la cuenta: gastos + transferencias externas (pagos de
+  // tarjeta, SPEI). Es lo que Nu mete en su renglón de "Gastos".
+  // Las Cajitas quedan fuera, igual que las deja Nu.
+  const outflow = round2(sum(transactions.filter(
+    (t) => t.kind === 'expense' || t._leavesAccount)));
   const sumIncome = round2(sum(transactions.filter((t) => t.kind === 'income')));
 
   const check = buildCheck(
-    { label: 'Gastos', declared: summary.gastos ?? null, computed: sumExpense },
+    { label: 'Salidas', declared: summary.gastos ?? null, computed: outflow },
     { label: 'Depósitos', declared: summary.depositos ?? null, computed: sumIncome },
     warnings,
   );
 
-  // Comprobación extra: saldo inicial + depósitos + rendimientos - gastos = saldo final
+  // Comprobación extra: saldo inicial + depósitos + rendimientos - salidas = saldo final
   if (['saldo_inicial', 'saldo_final', 'rendimientos'].every((k) => summary[k] !== undefined)) {
     const reconstructed = round2(
-      summary.saldo_inicial + (summary.depositos ?? 0) + summary.rendimientos - sumExpense,
+      summary.saldo_inicial + (summary.depositos ?? 0) + summary.rendimientos - outflow,
     );
     check.balance = {
       label: 'Saldo final',
