@@ -1,7 +1,10 @@
 // Pantallas de configuración inicial y de login.
 
 import { el, mount, toast, withBusy } from '../dom.js';
-import { getConfig, saveConfig, looksLikeSecretKey, looksLikePublishableKey } from '../config.js';
+import {
+  getConfig, saveConfig, clearConfig, configIsBakedIn,
+  looksLikeSecretKey, looksLikePublishableKey,
+} from '../config.js';
 import { resetClient, signIn, signUp, resetPassword, authErrorMessage } from '../supabase.js';
 
 /** Primera pantalla si no hay URL/anon key configuradas. */
@@ -102,13 +105,15 @@ export function renderAuth(root) {
         }, 'Olvidé mi contraseña'),
       ),
 
-      el('button', {
-        type: 'button', class: 'linkish linkish--quiet',
-        onclick: () => {
-          localStorage.removeItem('loothound.supabase');
-          location.reload();
-        },
-      }, `Cambiar de proyecto (${new URL(getConfig().url).hostname})`),
+      // Con la configuración fija en el código, borrar el localStorage no
+      // cambiaría nada: sólo tiene sentido ofrecerlo a quien clonó el repo y
+      // capturó sus propios datos a mano.
+      configIsBakedIn()
+        ? el('p', { class: 'note' }, new URL(getConfig().url).hostname)
+        : el('button', {
+            type: 'button', class: 'linkish linkish--quiet',
+            onclick: () => { clearConfig(); location.reload(); },
+          }, `Cambiar de proyecto (${new URL(getConfig().url).hostname})`),
     );
 
     form.addEventListener('submit', async (e) => {

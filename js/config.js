@@ -21,8 +21,8 @@
 // Si clonas este repo, crea TU propio proyecto de Supabase y reemplaza esto,
 // o déjalo vacío y la app te lo pedirá en la primera pantalla.
 const BAKED_IN = {
-  url: '',      // https://xxxxxxxxxxxx.supabase.co
-  anonKey: '',  // sb_publishable_...  (o la anon key vieja, un JWT eyJ...)
+  url: 'https://ekkaexssmeudoykqupxq.supabase.co',
+  anonKey: 'sb_publishable_gBPOiP8HCUBB_IB0lb7djQ_jYzV0Sv8',
 };
 
 const STORAGE_KEY = 'loothound.supabase';
