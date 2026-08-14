@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="es-MX">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LootHound — laboratorio de parsers</title>
+  <link rel="stylesheet" href="../css/styles.css">
+</head>
+<body>
+<main class="main">
+  <h1>Laboratorio de parsers</h1>
+  <p class="muted">
+    Herramienta de depuración: procesa un PDF y muestra las líneas crudas que
+    extrajo pdf.js junto con lo que entendió el parser. Sirve para cuando un
+    banco cambia el formato de su estado de cuenta.
+    El archivo no sale de tu navegador.
+  </p>
+
+  <section class="card">
+    <input type="file" id="file" accept="application/pdf">
+    <label style="margin-left:1rem">
+      <input type="checkbox" id="showLines"> Mostrar todas las líneas extraídas
+    </label>
+  </section>
+
+  <section class="card"><pre id="out" style="white-space:pre-wrap;font-size:.8rem;margin:0">Escoge un PDF...</pre></section>
+</main>
+
+<script type="module">
+import { pdfToLines } from '../js/parsers/lines.js';
+import { detectBank, parserFor } from '../js/parsers/index.js';
+
+const out = document.getElementById('out');
+
+document.getElementById('file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  out.textContent = 'Procesando...';
+  try {
+    const t0 = performance.now();
+    const lines = await pdfToLines(await file.arrayBuffer());
+    const ms = Math.round(performance.now() - t0);
+
+    const bank = detectBank(lines);
+    let report = `archivo: ${file.name} (${Math.round(file.size / 1024)} KB)\n`;
+    report += `líneas extraídas: ${lines.length} en ${ms} ms\n`;
+    report += `banco detectado: ${bank || '(ninguno)'}\n`;
+
+    if (document.getElementById('showLines').checked) {
+      report += `\n--- LÍNEAS ---\n`;
+      report += lines.map((l, i) => `${String(i).padStart(4)} p${l.page} | ${l.text}`).join('\n');
+    }
+
+    if (bank) {
+      const r = parserFor(bank).parse(lines);
+      report += `\n\n--- RESULTADO ---\n`;
+      report += `movimientos: ${r.transactions.length}\n`;
+      report += `periodo: ${JSON.stringify(r.period)}\n`;
+      report += `totales del PDF: ${JSON.stringify(r.statement)}\n`;
+      report += `validación: ${r.check.ok ? 'CUADRA' : 'NO CUADRA'}\n`;
+      report += JSON.stringify(r.check, null, 2) + '\n';
+      report += `advertencias: ${JSON.stringify(r.warnings, null, 2)}\n\n`;
+      for (const t of r.transactions) {
+        const fx = t.original_amount ? `  [${t.original_currency} ${t.original_amount} @ ${t.fx_rate}]` : '';
+        report += `${t.occurred_on}  ${t.kind.padEnd(8)}  ${String(t.amount).padStart(10)}  ${t.description}${fx}\n`;
+      }
+    }
+    out.textContent = report;
+  } catch (err) {
+    out.textContent = `ERROR: ${err.stack || err.message || err}`;
+  }
+});
+</script>
+</body>
+</html>

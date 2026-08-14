@@ -1,0 +1,23 @@
+# ---------------------------------------------------------------------------
+# NUNCA subir estados de cuenta reales: este repo es público.
+# ---------------------------------------------------------------------------
+*.pdf
+!tests/fixtures/*.pdf
+/_devdata/
+*.statement.json
+*.real.json
+
+# Respaldos exportados por la app
+loothound-*.json
+
+# Sistema / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+
+# Node (sólo se usa para correr las pruebas)
+node_modules/
+npm-debug.log*
