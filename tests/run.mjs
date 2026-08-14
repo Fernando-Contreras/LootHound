@@ -5,6 +5,8 @@
 // Supabase ni el DOM. Los fixtures son sintéticos: este repo es público.
 // ===========================================================================
 
+import fs from 'node:fs';
+
 import * as bbva from '../js/parsers/bbva.js';
 import * as nu from '../js/parsers/nu.js';
 import * as fin from '../js/finance.js';
@@ -412,6 +414,42 @@ group('lo que se manda a la base cumple las restricciones', () => {
   eq('rellena lo vacío', imp.clampDescription('   '), 'Movimiento');
   eq('deja intacto lo normal', imp.clampDescription('  OXXO   COXUMEL  '), 'OXXO COXUMEL');
   eq('tolera null', imp.clampDescription(null), 'Movimiento');
+});
+
+// ------------------------------------------------ rompe-caché de módulos
+group('el import map cubre todos los módulos', () => {
+  // Un módulo que falte aquí se queda cacheado mientras los demás se
+  // actualizan, y la app corre mitad vieja y mitad nueva. Eso ya costó una
+  // sesión de depuración: el arreglo estaba publicado, pero el navegador
+  // seguía ejecutando el store.js anterior.
+  const raiz = new URL('../', import.meta.url);
+  const html = fs.readFileSync(new URL('index.html', raiz), 'utf8');
+
+  const mapa = JSON.parse(
+    html.match(/<script type="importmap">\s*([\s\S]*?)\s*<\/script>/)[1],
+  ).imports;
+
+  const listar = (dir, prefijo) => fs.readdirSync(new URL(dir, raiz), { withFileTypes: true })
+    .flatMap((e) => (e.isDirectory()
+      ? listar(`${dir}${e.name}/`, `${prefijo}${e.name}/`)
+      : (e.name.endsWith('.js') ? [`${prefijo}${e.name}`] : [])));
+
+  const modulos = listar('js/', './js/').sort();
+
+  eq('no falta ningún módulo en el import map',
+    modulos.filter((m) => !mapa[m]), []);
+  eq('no sobra ninguna entrada',
+    Object.keys(mapa).filter((k) => !modulos.includes(k)), []);
+
+  // Todas deben apuntar a la MISMA versión: si una se queda atrás, vuelve el
+  // problema para ese archivo en concreto.
+  const versiones = [...new Set(Object.values(mapa).map((v) => v.split('?v=')[1]))];
+  eq('todas apuntan a una sola versión', versiones.length, 1);
+
+  const vEntrada = html.match(/src="\.\/js\/app\.js\?v=(\d+)"/)?.[1];
+  const vCss = html.match(/href="\.\/css\/styles\.css\?v=(\d+)"/)?.[1];
+  eq('el script de entrada usa esa versión', vEntrada, versiones[0]);
+  eq('el CSS usa esa versión', vCss, versiones[0]);
 });
 
 // ---------------------------------------------------------------------- run

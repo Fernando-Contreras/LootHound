@@ -6,9 +6,7 @@
   <title>LootHound — finanzas personales</title>
   <meta name="description" content="Tracker de gastos e ingresos. Importa estados de cuenta en PDF sin que el archivo salga de tu dispositivo.">
   <meta name="color-scheme" content="dark light">
-  <!-- El ?v= se sube a mano cuando cambia el diseño: GitHub Pages cachea los
-       archivos 10 minutos y sin esto habría que recargar con Ctrl+Shift+R. -->
-  <link rel="stylesheet" href="./css/styles.css?v=2">
+  <link rel="stylesheet" href="./css/styles.css?v=7">
   <script>
     // Se aplica antes de pintar para que no haya un destello blanco al cargar.
     try {
@@ -33,6 +31,53 @@
 
   <!-- Copia local de supabase-js: nada de CDNs en tiempo de ejecución. -->
   <script src="./vendor/supabase.umd.js"></script>
-  <script type="module" src="./js/app.js"></script>
+
+  <!--
+    ROMPE-CACHÉ DE MÓDULOS
+
+    GitHub Pages sirve los archivos con 10 minutos de caché, y poner `?v=` sólo
+    en el <script> de abajo NO alcanza: los `import` que están DENTRO de app.js
+    se resuelven sin la versión, así que el navegador sigue entregando módulos
+    viejos y la app queda mitad nueva y mitad vieja — peor que estar toda vieja,
+    porque falla de formas raras y difíciles de diagnosticar.
+
+    El import map reescribe cada módulo a su versión, incluidos esos imports
+    internos. Subir APP_VERSION invalida todos de golpe.
+
+    Las rutas van relativas (./js/...) a propósito: así funciona igual en
+    localhost que en https://usuario.github.io/LootHound/.
+
+    Al agregar un archivo nuevo en js/ hay que listarlo aquí. La prueba
+    "el import map cubre todos los módulos" en tests/run.mjs falla si se olvida.
+  -->
+  <script type="importmap">
+  {
+    "imports": {
+      "./js/app.js": "./js/app.js?v=7",
+      "./js/categorize.js": "./js/categorize.js?v=7",
+      "./js/charts.js": "./js/charts.js?v=7",
+      "./js/config.js": "./js/config.js?v=7",
+      "./js/dedupe.js": "./js/dedupe.js?v=7",
+      "./js/dom.js": "./js/dom.js?v=7",
+      "./js/finance.js": "./js/finance.js?v=7",
+      "./js/store.js": "./js/store.js?v=7",
+      "./js/supabase.js": "./js/supabase.js?v=7",
+      "./js/parsers/bbva.js": "./js/parsers/bbva.js?v=7",
+      "./js/parsers/bbva-debito.js": "./js/parsers/bbva-debito.js?v=7",
+      "./js/parsers/common.js": "./js/parsers/common.js?v=7",
+      "./js/parsers/identity.js": "./js/parsers/identity.js?v=7",
+      "./js/parsers/index.js": "./js/parsers/index.js?v=7",
+      "./js/parsers/lines.js": "./js/parsers/lines.js?v=7",
+      "./js/parsers/mercadopago.js": "./js/parsers/mercadopago.js?v=7",
+      "./js/parsers/nu.js": "./js/parsers/nu.js?v=7",
+      "./js/views/auth.js": "./js/views/auth.js?v=7",
+      "./js/views/dashboard.js": "./js/views/dashboard.js?v=7",
+      "./js/views/import.js": "./js/views/import.js?v=7",
+      "./js/views/rules.js": "./js/views/rules.js?v=7",
+      "./js/views/transactions.js": "./js/views/transactions.js?v=7"
+    }
+  }
+  </script>
+  <script type="module" src="./js/app.js?v=7"></script>
 </body>
 </html>
