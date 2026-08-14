@@ -91,24 +91,48 @@ Supabase tiene un límite bajo (unos pocos correos por hora).
 
 ## 5. Copiar las llaves a la app
 
-**Project Settings** → **API**:
+Supabase cambió el dashboard y el formato de llaves, así que hay dos casos:
 
-- **Project URL** → se ve como `https://abcdefgh.supabase.co`
-- **anon / public** key → un JWT largo que empieza con `eyJ...`
+**Project Settings → Data API**
+- **Project URL** → `https://abcdefgh.supabase.co`
 
-Pégalas en la primera pantalla de la app. Se guardan en el `localStorage` de tu
-navegador.
+  Si no la encuentras, mírala en la barra de direcciones: cuando estás en el
+  dashboard la URL es `.../dashboard/project/abcdefgh`, y ese pedazo final +
+  `.supabase.co` es tu Project URL.
 
-Si prefieres dejarlas fijas en el repo (para no capturarlas en cada dispositivo),
-edita [`js/config.js`](../js/config.js) y llena `BAKED_IN`.
+**Project Settings → API Keys**
+- La llave **publishable** → empieza con `sb_publishable_...`
+- En proyectos viejos se llama **anon / public** y es un JWT que empieza con
+  `eyJ...`. Las dos funcionan.
 
-> **La llave `anon` es segura de publicar** — es un identificador público del
-> proyecto, no una contraseña. Quien la tenga puede hablarle a tu API, y ahí es
-> RLS quien decide qué filas devuelve: sin sesión, ninguna.
+Pégalas en la primera pantalla de la app (se guardan en el `localStorage` de
+ese navegador), o mejor: déjalas fijas en [`js/config.js`](../js/config.js) en
+`BAKED_IN`, y así la app funciona en cualquier dispositivo sin recapturarlas.
+
+> **La llave publicable es segura de publicar** — es un identificador público
+> del proyecto, no una contraseña. Quien la tenga puede hablarle a tu API, y
+> ahí RLS decide qué devuelve: sin sesión, nada.
 >
-> **La llave `service_role` NO.** Esa se salta RLS por completo. No la pongas
-> nunca en el frontend ni en el repo. La app rechaza esa llave si la pegas por
-> error.
+> **Las llaves `sb_secret_...` y `service_role` NO.** Ésas se saltan RLS por
+> completo. Nunca en el frontend ni en el repo. La app y el verificador
+> rechazan ambas si las pegas por error.
+
+Hay otra sección llamada **JWT Keys** con un ID en formato UUID. Ése no se usa
+para nada aquí; es el identificador de la llave con la que Supabase firma las
+sesiones.
+
+### Comprobar que RLS de verdad funciona
+
+El SQL del paso 3 revisa que las políticas *existan*. Esto comprueba que además
+*funcionan*, pegándole a tu API sin sesión — justo lo que puede hacer cualquiera
+que clone el repo:
+
+```bash
+node tools/check-rls.mjs https://TUPROYECTO.supabase.co sb_publishable_TULLAVE
+```
+
+Debe responder que ninguna tabla devuelve filas y que las escrituras se
+rechazan. Si alguna tabla contesta con datos, **no publiques el repo**.
 
 ---
 
