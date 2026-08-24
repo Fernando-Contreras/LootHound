@@ -148,6 +148,20 @@ Contarlas inflaría ambos lados del balance.
 
 ---
 
+## Que Supabase no se duerma
+
+Los proyectos gratuitos se pausan tras 7 días sin actividad. El repo trae un
+GitHub Action ([`keepalive.yml`](.github/workflows/keepalive.yml)) que le pega
+cada 2 días llamando a `public.ping()`, una función que hace una escritura
+mínima — no una simple lectura, porque no está documentado si un `401` cuenta
+como actividad.
+
+Corre [`supabase/03_keepalive.sql`](supabase/03_keepalive.sql) una vez y se
+encarga solo. Para revisar que siga vivo: `select * from public.heartbeat;`
+
+Un detalle a tener presente: GitHub apaga los workflows programados si el repo
+pasa 60 días sin commits. Avisa por correo y se reactivan con un clic.
+
 ## Pruebas
 
 ```bash

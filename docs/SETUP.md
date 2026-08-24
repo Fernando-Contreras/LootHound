@@ -136,6 +136,52 @@ rechazan. Si alguna tabla contesta con datos, **no publiques el repo**.
 
 ---
 
+## 5.5 Evitar que Supabase pause el proyecto
+
+Los proyectos del plan gratuito **se pausan tras 7 días sin actividad**, y
+despausarlos es manual desde el dashboard. Si no entras a la app durante una
+semana, un día la abres y no funciona.
+
+El repo trae un robot que le pega cada 2 días.
+
+1. **SQL Editor** → pega [`supabase/03_keepalive.sql`](../supabase/03_keepalive.sql)
+   → **Run**. Crea la tabla `heartbeat` y la función `ping()`.
+2. Listo. El workflow ya está en el repo y arranca solo.
+
+Para probarlo sin esperar: en GitHub → pestaña **Actions** → *Latido de
+Supabase* → **Run workflow**.
+
+Desde tu compu también:
+
+```bash
+node tools/keepalive.mjs
+```
+
+Para ver si sigue vivo, en el SQL Editor:
+
+```sql
+select * from public.heartbeat;
+```
+
+Si `last_ping` tiene más de 3 días, algo pasó con el robot — revisa la pestaña
+Actions.
+
+> **Ojo con esto:** GitHub apaga los workflows programados si el repositorio
+> pasa **60 días sin ningún commit**. Te avisa por correo antes, y se
+> reactivan con un clic desde Actions. Si vas a dejar el proyecto quieto
+> mucho tiempo, ponte un recordatorio.
+
+### Por qué el ping escribe en vez de sólo leer
+
+Pegarle al REST sin sesión devuelve `401`, y no está documentado si Supabase
+cuenta eso como actividad. La función `ping()` hace un `UPDATE` real, así que
+no hay duda de que la base trabajó.
+
+Es segura de exponer: no lee ni escribe nada tuyo, sólo devuelve la hora del
+servidor, y la tabla que toca no es legible por nadie desde fuera.
+
+---
+
 ## 6. Publicar en GitHub Pages
 
 ```bash

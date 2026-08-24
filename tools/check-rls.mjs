@@ -23,7 +23,12 @@ if (/^sb_secret_/i.test(key)) {
 }
 
 const url = rawUrl.trim().replace(/\/+$/, '');
-const TABLES = ['transactions', 'accounts', 'categories', 'category_rules', 'imports', 'settings'];
+const TABLES = [
+  'transactions', 'accounts', 'categories', 'category_rules', 'imports', 'settings',
+  // `heartbeat` no guarda datos tuyos, pero tampoco debe ser legible: el robot
+  // sólo puede tocarla a través de la función ping().
+  'heartbeat',
+];
 
 const headers = { apikey: key, Authorization: `Bearer ${key}` };
 let failures = 0;

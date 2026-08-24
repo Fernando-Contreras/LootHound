@@ -20,6 +20,10 @@ order by c.relname;
 
 -- ---------------------------------------------------------------------------
 -- B. ¿Cada tabla tiene las 4 políticas (select/insert/update/delete)?
+--
+-- `heartbeat` no aparece aquí a propósito: no tiene políticas ni debe tenerlas.
+-- Con RLS activo y cero políticas, nadie puede tocarla directamente; el único
+-- camino es la función public.ping(), que corre como dueña.
 -- ---------------------------------------------------------------------------
 select
   tablename as tabla,
