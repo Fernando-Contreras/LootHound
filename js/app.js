@@ -2,7 +2,9 @@
 
 import { el, mount, $, toast } from './dom.js';
 import { getConfig } from './config.js';
-import { currentSession, onAuthChange, signOut, getClient } from './supabase.js';
+import {
+  currentSession, onAuthChange, signOut, getClient, diagnosticarConexion,
+} from './supabase.js';
 import * as store from './store.js';
 import * as fin from './finance.js';
 import { renderSetup, renderAuth } from './views/auth.js';
@@ -86,7 +88,12 @@ async function loadData() {
     state.imports = imports;
   } catch (err) {
     console.error(err);
-    toast(store.dbErrorMessage(err), 'error', 8000);
+    // Si es un fallo de red, casi siempre es el proyecto pausado: vale más
+    // decirlo con todas sus letras que un "sin conexión" que no orienta.
+    const mensaje = /Failed to fetch|NetworkError|fetch failed/i.test(String(err?.message || err))
+      ? await diagnosticarConexion()
+      : store.dbErrorMessage(err);
+    toast(mensaje, 'error', 12000);
   } finally {
     state.loading = false;
   }

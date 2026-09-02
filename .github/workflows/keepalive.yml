@@ -24,9 +24,9 @@ on:
   # Permite dispararlo a mano desde la pestaña Actions para probarlo.
   workflow_dispatch:
 
-# Sin permisos de escritura: sólo necesita leer el repo.
+# Escritura para el sello mensual del paso de abajo.
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: keepalive
@@ -39,6 +39,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Historial completo: con el clon superficial que trae por defecto,
+          # el `git pull --rebase` del sello mensual falla.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -46,6 +50,47 @@ jobs:
 
       - name: Ping a Supabase
         run: node tools/keepalive.mjs
+
+      # ------------------------------------------------------------------
+      # Mantener vivo al propio robot.
+      #
+      # GitHub apaga los workflows programados cuando el repositorio pasa 60
+      # días sin actividad. En un proyecto personal eso llega solo, y el modo
+      # de falla es silencioso: el robot se apaga, nadie lo nota, y a los 7
+      # días Supabase pausa el proyecto. Justo lo que se quería evitar.
+      #
+      # Un commit al mes reinicia ese contador. Doce al año no ensucian el
+      # historial, y llevan escrito para qué son.
+      # ------------------------------------------------------------------
+      - name: Sello mensual para que GitHub no apague el cron
+        if: github.event_name == 'schedule'
+        continue-on-error: true   # si falla, el ping ya cumplió: no marcar rojo
+        run: |
+          if [ "$(date -u +%d)" != "01" ]; then
+            echo "Hoy no toca sello (sólo el día 1)."
+            exit 0
+          fi
+
+          date -u +"Último latido verificado: %Y-%m-%d %H:%M UTC" > .github/last-keepalive.txt
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/last-keepalive.txt
+
+          if git diff --staged --quiet; then
+            echo "Sin cambios que sellar."
+            exit 0
+          fi
+
+          git commit -m "Sello mensual del latido
+
+          Commit automático. Su único fin es dar actividad al repositorio:
+          GitHub apaga los workflows programados tras 60 días sin ninguna,
+          y si este se apaga, Supabase acaba pausando el proyecto."
+
+          # Otro push pudo entrar mientras corría el ping.
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
       # Si el ping falla, GitHub manda correo por el job fallido. Este paso
       # sólo deja el motivo escrito en el resumen del run, para no tener que

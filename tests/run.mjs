@@ -15,6 +15,7 @@ import * as cat from '../js/categorize.js';
 import * as id from '../js/parsers/identity.js';
 import * as bbvaDebito from '../js/parsers/bbva-debito.js';
 import * as imp from '../js/views/import.js';
+import * as sup from '../js/supabase.js';
 
 import * as fxBbva from './fixtures/bbva-sintetico.js';
 import * as fxNu from './fixtures/nu-sintetico.js';
@@ -414,6 +415,37 @@ group('lo que se manda a la base cumple las restricciones', () => {
   eq('rellena lo vacío', imp.clampDescription('   '), 'Movimiento');
   eq('deja intacto lo normal', imp.clampDescription('  OXXO   COXUMEL  '), 'OXXO COXUMEL');
   eq('tolera null', imp.clampDescription(null), 'Movimiento');
+});
+
+// ------------------------------------------------ mensajes de error
+group('los errores dicen qué hacer', () => {
+  // Un proyecto pausado se ve igual que una URL mal escrita: "Failed to
+  // fetch". La app decía "¿la URL del proyecto es correcta?", que manda a
+  // revisar justo lo único que NO estaba mal — costó una sesión entera.
+  // authErrorMessage devuelve null en esos casos para que explicarError()
+  // salga a sondear la red y dé el diagnóstico bueno.
+  eq('un fallo de red pide diagnóstico',
+    sup.authErrorMessage(new Error('TypeError: Failed to fetch')), null);
+  eq('también en la variante de Safari',
+    sup.authErrorMessage(new Error('Load failed')), null);
+  eq('y en la de Node',
+    sup.authErrorMessage(new Error('fetch failed')), null);
+
+  // Los errores que el servidor sí explica no deben sondear nada.
+  eq('credenciales malas se responden directo',
+    sup.authErrorMessage(new Error('Invalid login credentials')),
+    'Correo o contraseña incorrectos.');
+  eq('correo sin confirmar',
+    sup.authErrorMessage(new Error('Email not confirmed')),
+    'Falta confirmar tu correo. Revisa tu bandeja.');
+  eq('correo ya registrado',
+    sup.authErrorMessage(new Error('User already registered')),
+    'Ese correo ya está registrado. Inicia sesión.');
+  eq('demasiados intentos',
+    sup.authErrorMessage(new Error('rate limit exceeded')),
+    'Demasiados intentos. Espera un momento.');
+  eq('un error desconocido se muestra tal cual',
+    sup.authErrorMessage(new Error('algo raro')), 'algo raro');
 });
 
 // ------------------------------------------------ rompe-caché de módulos

@@ -5,7 +5,7 @@ import {
   getConfig, saveConfig, clearConfig, configIsBakedIn,
   looksLikeSecretKey, looksLikePublishableKey,
 } from '../config.js';
-import { resetClient, signIn, signUp, resetPassword, authErrorMessage } from '../supabase.js';
+import { resetClient, signIn, signUp, resetPassword, explicarError } from '../supabase.js';
 
 /** Primera pantalla si no hay URL/anon key configuradas. */
 export function renderSetup(root, onDone) {
@@ -100,7 +100,7 @@ export function renderAuth(root) {
             try {
               await resetPassword(email);
               toast('Te mandamos un correo para restablecer la contraseña.', 'ok');
-            } catch (err) { toast(authErrorMessage(err), 'error'); }
+            } catch (err) { toast(await explicarError(err), 'error', 12000); }
           },
         }, 'Olvidé mi contraseña'),
       ),
@@ -135,7 +135,7 @@ export function renderAuth(root) {
             render();
           }
         } catch (err) {
-          toast(authErrorMessage(err), 'error', 6000);
+          toast(await explicarError(err), 'error', 12000);
         }
       });
     });

@@ -67,7 +67,59 @@ export function onAuthChange(cb) {
   return () => data.subscription.unsubscribe();
 }
 
-/** Traduce los errores de Supabase a algo legible en español. */
+/** ¿Es un fallo de red, en vez de un rechazo del servidor? */
+function esFalloDeRed(err) {
+  return /Failed to fetch|NetworkError|fetch failed|Load failed/i.test(
+    String(err?.message || err || ''),
+  );
+}
+
+/**
+ * Averigua POR QUÉ no se pudo conectar.
+ *
+ * El navegador reporta igual un DNS que no resuelve, un CORS bloqueado y estar
+ * sin internet: todos son "Failed to fetch". Distinguirlos importa porque la
+ * causa más común aquí tiene una solución concreta y nada obvia.
+ *
+ * Los proyectos gratuitos de Supabase se PAUSAN tras 7 días sin actividad, y al
+ * pausarse su subdominio deja de existir. La app antes decía "¿la URL es
+ * correcta?", que manda a revisar justo lo único que no estaba mal.
+ *
+ * @returns {Promise<string>} explicación lista para mostrar
+ */
+export async function diagnosticarConexion() {
+  const cfg = getConfig();
+
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return 'Parece que no tienes internet. Revisa tu conexión.';
+  }
+
+  // ¿Hay internet pero el proyecto no responde? Se compara contra un destino
+  // que sabemos que funciona: el propio sitio desde donde corre la app.
+  let hayInternet = false;
+  try {
+    await fetch(`${location.origin}/index.html?ping=${Date.now()}`, { cache: 'no-store' });
+    hayInternet = true;
+  } catch { /* ni el propio sitio responde */ }
+
+  if (!hayInternet) {
+    return 'No hay conexión a internet. Revisa tu red e inténtalo de nuevo.';
+  }
+
+  const host = cfg ? new URL(cfg.url).hostname : 'tu proyecto';
+  return (
+    `Tu proyecto de Supabase (${host}) no responde. ` +
+    'Lo más probable es que esté PAUSADO: los proyectos gratuitos se pausan ' +
+    'tras 7 días sin usarse. Entra a supabase.com/dashboard, ábrelo y dale ' +
+    '"Restore project". Tarda un par de minutos y no pierdes nada.'
+  );
+}
+
+/**
+ * Traduce los errores de Supabase a algo legible en español.
+ * Para fallos de red devuelve una promesa, porque hay que sondear para saber
+ * la causa; el resto sale de inmediato.
+ */
 export function authErrorMessage(err) {
   const m = String(err?.message || err || '');
   if (/Invalid login credentials/i.test(m)) return 'Correo o contraseña incorrectos.';
@@ -75,6 +127,11 @@ export function authErrorMessage(err) {
   if (/User already registered/i.test(m)) return 'Ese correo ya está registrado. Inicia sesión.';
   if (/Password should be at least/i.test(m)) return 'La contraseña debe tener al menos 6 caracteres.';
   if (/rate limit|too many/i.test(m)) return 'Demasiados intentos. Espera un momento.';
-  if (/Failed to fetch|NetworkError/i.test(m)) return 'No se pudo conectar. ¿La URL del proyecto es correcta?';
+  if (esFalloDeRed(err)) return null;   // null = hay que diagnosticar
   return m || 'Algo salió mal.';
+}
+
+/** Igual que la anterior, pero resolviendo también los fallos de red. */
+export async function explicarError(err) {
+  return authErrorMessage(err) ?? await diagnosticarConexion();
 }
