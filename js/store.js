@@ -190,6 +190,29 @@ export async function undoImport(importId) {
   if (e2) throw e2;
 }
 
+// ---------------------------------------------------------------- presupuesto
+export async function fetchBudgets() {
+  const { data, error } = await sb().from('budgets').select('*');
+  // La tabla es opcional: si aún no se corre 04_presupuesto.sql, la app sigue
+  // funcionando con el presupuesto calculado y sin ajustes guardados.
+  if (error) {
+    if (/does not exist|schema cache/i.test(error.message)) return null;
+    throw error;
+  }
+  return data;
+}
+
+export async function saveBudget({ category_id, amount, month = null }) {
+  return unwrap(await sb().from('budgets')
+    .upsert({ category_id, amount, month }, { onConflict: 'user_id,category_id,month' })
+    .select().single());
+}
+
+export async function deleteBudget(id) {
+  const { error } = await sb().from('budgets').delete().eq('id', id);
+  if (error) throw error;
+}
+
 // ---------------------------------------------------------------- ajustes
 export async function fetchSettings() {
   const rows = unwrap(await sb().from('settings').select('*').limit(1));

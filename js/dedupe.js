@@ -63,15 +63,20 @@ function identityKey(tx) {
  * @returns {Array} el mismo arreglo, con `fingerprint` y `duplicate` puestos
  */
 export function assignFingerprints(incoming, existing = []) {
-  // cuántos idénticos ya hay guardados
-  const existingCounts = new Map();
   const existingPrints = new Set();
   for (const tx of existing) {
-    const k = identityKey(tx);
-    existingCounts.set(k, (existingCounts.get(k) || 0) + 1);
     if (tx.fingerprint) existingPrints.add(tx.fingerprint);
   }
 
+  // El índice de repetición se cuenta SOBRE EL ARCHIVO, no sobre lo que ya
+  // está guardado. Es lo que hace que funcionen los traslapes:
+  //
+  //   estado de cuenta A (jul):  CAFE#0, CAFE#1        → se guardan los dos
+  //   estado de cuenta B (jul-ago, traslapado): mismos CAFE#0 y CAFE#1
+  //     → las huellas coinciden con las guardadas → se marcan duplicados
+  //
+  // Si el índice dependiera de lo guardado, en B serían CAFE#2 y CAFE#3 y
+  // entrarían otra vez, duplicando el gasto.
   const seenInBatch = new Map();
   for (const tx of incoming) {
     const k = identityKey(tx);

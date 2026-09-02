@@ -332,8 +332,7 @@ function previewTable(p, state, rerender) {
 // ---------------------------------------------------------------------------
 async function doImport(button, host, state, actions) {
   const p = pending;
-  const rows = p.transactions.filter((t) => t.selected);
-  if (!rows.length) return;
+  if (!p.transactions.some((t) => t.selected)) return;
 
   await withBusy(button, async () => {
     let importRecord = null;
@@ -349,10 +348,23 @@ async function doImport(button, host, state, actions) {
         parsed_count: p.transactions.length,
       });
 
-      // Si el usuario cambió `kind` en el preview, la huella cambia: se recalcula.
-      assignFingerprints(rows, []);
+      // Recalcular las huellas, porque cambiar el `kind` en el preview las
+      // altera. Dos detalles que parecen menores y no lo son:
+      //
+      //   1. Se recalcula sobre TODO el estado de cuenta, no sólo sobre lo
+      //      seleccionado. El índice de repetición cuenta cuántos movimientos
+      //      idénticos hay en el archivo; si se cuenta sólo sobre los
+      //      marcados, el segundo café idéntico del día pasa a creerse el
+      //      primero, choca con el que ya estaba guardado y se pierde en
+      //      silencio.
+      //   2. Se compara contra lo que YA está en la base, recién consultado,
+      //      no contra una lista vacía. Si no, ningún duplicado se reconoce
+      //      en este punto.
+      const guardados = await store.fetchFingerprintIndex();
+      assignFingerprints(p.transactions, guardados);
+      const seleccionados = p.transactions.filter((t) => t.selected);
 
-      const payload = rows.map((t) => ({
+      const payload = seleccionados.map((t) => ({
         account_id: p.account.id,
         counter_account_id: t.counter_account_id || null,
         transfer_reason: t.transfer_reason || null,

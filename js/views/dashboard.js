@@ -152,7 +152,7 @@ function stat(label, value, tone, changePct = null, invertTone = false) {
     delta = el('span', {
       class: `stat__delta ${changePct === 0 ? '' : good ? 'is-good' : 'is-bad'}`,
       title: 'Contra el mes anterior',
-    }, `${up ? '▲' : changePct < 0 ? '▼' : '='} ${Math.abs(changePct)}%`);
+    }, `${up ? '▲' : changePct < 0 ? '▼' : '='} ${Math.round(Math.abs(changePct))}%`);
   }
   return el('div', { class: `stat stat--${tone}` },
     el('span', { class: 'stat__label' }, label),

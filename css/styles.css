@@ -270,6 +270,26 @@ tr.is-off { opacity: .5; }
 .cashcard__row strong { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
 .cashcard__op { font-size: 1.2rem; color: var(--muted); }
 
+/* -------------------------------------------------------------- presupuesto */
+.insights { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+.insight {
+  display: grid; gap: .15rem; padding: .6rem .8rem;
+  border-radius: 8px; border-left: 3px solid var(--line); background: var(--surface-2);
+  font-size: .88rem;
+}
+.insight--good { border-left-color: var(--in); }
+.insight--bad { border-left-color: var(--out); }
+.insight--warn { border-left-color: var(--warn); }
+.insight--info { border-left-color: var(--accent); }
+.insight span { font-size: .82rem; }
+
+.input-tope {
+  width: 96px; text-align: right; padding: .25rem .4rem;
+  font-size: .85rem; font-variant-numeric: tabular-nums;
+}
+tr.is-over td { background: color-mix(in srgb, var(--out) 8%, transparent); }
+.table .rank__track { min-width: 90px; display: block; }
+
 .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .85rem; }
 .chip {
   display: inline-flex; align-items: center; gap: .35rem;

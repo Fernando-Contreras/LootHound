@@ -283,6 +283,87 @@ group('las reglas nuevas aplican a lo que ya tenías', () => {
   eq('no borra categorías existentes', sinReglas.length, 0);
 });
 
+// ------------------------------------- nada se duplica al reimportar
+group('subir un estado de cuenta dos veces no duplica nada', () => {
+  const mk = (desc, amount, date) =>
+    ({ account_id: 'bbva', occurred_on: date, amount, kind: 'expense', description: desc });
+
+  // Simula lo que hace la app: parsea, calcula huellas contra lo guardado,
+  // deja marcado sólo lo nuevo, y guarda eso.
+  const importar = (archivo, baseDeDatos) => {
+    const lote = archivo.map((t) => ({ ...t }));
+    dedupe.assignFingerprints(lote, baseDeDatos);
+    for (const t of lote) t.selected = !t.duplicateReason;
+
+    // Al confirmar se recalcula sobre TODO el archivo, no sólo lo marcado.
+    dedupe.assignFingerprints(lote, baseDeDatos);
+    const nuevos = lote.filter((t) => t.selected);
+
+    // La base rechaza cualquier huella repetida (UNIQUE user_id+fingerprint).
+    const yaHay = new Set(baseDeDatos.map((t) => t.fingerprint));
+    const aceptados = nuevos.filter((t) => !yaHay.has(t.fingerprint));
+    return { base: [...baseDeDatos, ...aceptados], insertados: aceptados.length, lote };
+  };
+
+  const julio = [
+    mk('OXXO COXUMEL', 98, '2026-07-14'),
+    mk('SQ *HOMAGE COFFEE', 280.46, '2026-07-27'),
+    mk('MAJESTIC BAY THEATRES', 165.55, '2026-07-21'),
+  ];
+
+  // --- caso 1: el MISMO archivo dos veces --------------------------------
+  let db = [];
+  ({ base: db } = importar(julio, db));
+  eq('la primera vez entran todos', db.length, 3);
+
+  const segunda = importar(julio, db);
+  eq('la segunda vez no entra ninguno', segunda.insertados, 0);
+  eq('el total sigue igual', segunda.base.length, 3);
+  eq('los tres se marcan como ya registrados',
+    segunda.lote.filter((t) => t.duplicateReason === 'exacto').length, 3);
+
+  // --- caso 2: archivos que se TRASLAPAN ---------------------------------
+  // Uno cubre jul; el otro, mitad de jul y mitad de ago. Los de la mitad
+  // compartida ya están guardados y no deben repetirse.
+  const julioAgosto = [
+    mk('SQ *HOMAGE COFFEE', 280.46, '2026-07-27'),   // ya está
+    mk('MAJESTIC BAY THEATRES', 165.55, '2026-07-21'), // ya está
+    mk('STARBUCKS STORE 11662', 444.69, '2026-08-06'), // nuevo
+    mk('QFC N5891', 773.64, '2026-08-11'),             // nuevo
+  ];
+  const traslape = importar(julioAgosto, db);
+  eq('sólo entran los del periodo nuevo', traslape.insertados, 2);
+  eq('el total es la unión, no la suma', traslape.base.length, 5);
+  eq('los repetidos se reconocen',
+    traslape.lote.filter((t) => t.duplicateReason === 'exacto').length, 2);
+
+  const gastoTotal = traslape.base.reduce((a, t) => a + t.amount, 0);
+  eq('el gasto no se infla', Math.round(gastoTotal * 100) / 100, 1762.34);
+
+  // --- caso 3: compras idénticas de verdad el mismo día -------------------
+  // Dos cafés iguales el mismo día SÍ son dos gastos. No se deben perder.
+  const conGemelos = [
+    mk('CAFE', 100, '2026-09-01'),
+    mk('CAFE', 100, '2026-09-01'),
+  ];
+  let db2 = [];
+  ({ base: db2 } = importar(conGemelos, db2));
+  eq('los dos cafés idénticos entran', db2.length, 2);
+
+  const otraVez = importar(conGemelos, db2);
+  eq('al reimportar no se duplican', otraVez.insertados, 0);
+  eq('siguen siendo dos', otraVez.base.length, 2);
+
+  // --- caso 4: el que rompía antes ---------------------------------------
+  // Un archivo traslapado donde el PRIMER gemelo ya está guardado pero el
+  // segundo no. Antes se recalculaba la huella sólo sobre lo marcado, el
+  // segundo café creía ser el primero, chocaba y se perdía en silencio.
+  const dbParcial = [{ ...conGemelos[0], fingerprint: dedupe.fingerprint(conGemelos[0], 0) }];
+  const rescate = importar(conGemelos, dbParcial);
+  eq('el gemelo que faltaba sí entra', rescate.insertados, 1);
+  eq('quedan los dos, sin perder ninguno', rescate.base.length, 2);
+});
+
 // ------------------------------------------------- transferencias propias
 group('transferencias entre cuentas propias (identity.js)', () => {
   const YO = ['Juan Fernando Salinas Contreras'];
@@ -415,6 +496,93 @@ group('lo que se manda a la base cumple las restricciones', () => {
   eq('rellena lo vacío', imp.clampDescription('   '), 'Movimiento');
   eq('deja intacto lo normal', imp.clampDescription('  OXXO   COXUMEL  '), 'OXXO COXUMEL');
   eq('tolera null', imp.clampDescription(null), 'Movimiento');
+});
+
+// ------------------------------------------------ presupuesto
+group('presupuesto calculado desde el historial', () => {
+  const CATS = new Map([
+    ['comida', { name: 'Comida', color: '#f97316' }],
+    ['viajes', { name: 'Viajes', color: '#14b8a6' }],
+  ]);
+  const g = (mes, dia, monto, cat) => ({
+    kind: 'expense', amount: monto, occurred_on: `${mes}-${String(dia).padStart(2, '0')}`,
+    account_id: 'a', category_id: cat,
+  });
+  const ing = (mes, monto) => ({
+    kind: 'income', amount: monto, occurred_on: `${mes}-05`, account_id: 'a', category_id: null,
+  });
+
+  // Tres meses de comida parecida, y UN viaje carísimo en uno solo.
+  const txs = [
+    g('2026-05', 10, 3000, 'comida'), ing('2026-05', 20000),
+    g('2026-06', 10, 3200, 'comida'), ing('2026-06', 20000),
+    g('2026-07', 10, 2800, 'comida'), ing('2026-07', 20000),
+    g('2026-07', 15, 30000, 'viajes'),   // gasto extraordinario
+  ];
+
+  const b = fin.suggestBudget(txs, CATS, { upTo: '2026-08' });
+  const comida = b.lines.find((l) => l.name === 'Comida');
+
+  eq('usa los meses cerrados', b.monthsUsed, 3);
+  eq('comida: mediana de 3000/3200/2800', comida.suggested, 3000);
+  eq('comida se midió con los 3 meses', comida.months, 3);
+
+  // Lo importante: un viaje de $30,000 que pasó UNA vez en tres meses no debe
+  // convertirse en un gasto mensual presupuestado. Con el promedio quedarían
+  // $10,000 al mes de viajes, que es falso.
+  eq('el viaje no entra al presupuesto',
+    b.lines.some((l) => l.name === 'Viajes'), false);
+  eq('el presupuesto es sólo lo recurrente', b.total, 3000);
+
+  eq('mediana vs promedio', fin.median([1, 2, 3, 100]), 2.5);
+  eq('mediana de lista vacía', fin.median([]), 0);
+
+  // El mes en curso no debe arrastrar la sugerencia hacia abajo
+  const conMesActual = [...txs, g('2026-08', 1, 200, 'comida')];
+  eq('ignora el mes a medias',
+    fin.suggestBudget(conMesActual, CATS, { upTo: '2026-08' }).monthsUsed, 3);
+
+  eq('ingreso típico', fin.typicalIncome(txs, { upTo: '2026-08' }).median, 20000);
+
+  // --- avance contra el tope ---------------------------------------------
+  const agosto = [g('2026-08', 3, 3500, 'comida')];
+  const topes = new Map([['comida', 3000]]);
+  const p = fin.budgetProgress(agosto, topes, CATS);
+  const linea = p.lines.find((l) => l.name === 'Comida');
+  eq('detecta que se pasó', linea.over, true);
+  eq('cuánto se pasó', linea.remaining, -500);
+  eq('cuenta las pasadas', p.overCount, 1);
+
+  // --- tasa de ahorro -----------------------------------------------------
+  const mes = [ing('2026-08', 20000), g('2026-08', 3, 5000, 'comida'),
+    { kind: 'transfer', amount: 9000, occurred_on: '2026-08-04', account_id: 'a' }];
+  const s = fin.savingsRate(mes);
+  eq('ahorro en pesos', s.net, 15000);
+  eq('ahorro en porcentaje', s.rate, 75);
+  eq('la transferencia no lo altera', s.expense, 5000);
+  eq('sin ingresos no hay porcentaje', fin.savingsRate([]).rate, null);
+
+  // --- la proyección no debe alarmar con ruido ----------------------------
+  // Una compra grande el día 1 proyectaba un mes catastrófico y la app
+  // avisaba "vas a quedar corto" al mismo tiempo que "podrías apartar X".
+  const mesCerrado = fin.spendingPace([g('2026-07', 10, 5000, 'comida')], '2026-07');
+  eq('un mes cerrado siempre es confiable', mesCerrado.reliable, true);
+  eq('no proyecta un mes cerrado', mesCerrado.isCurrentMonth, false);
+
+  const insightsTempranos = fin.budgetInsights({
+    monthTxs: [g(fin.currentMonth(), 1, 2400, 'comida')],
+    prevTxs: [], categories: CATS,
+    income: { median: 33334, monthsUsed: 3 },
+    pace: { ...fin.spendingPace([], fin.currentMonth()), spent: 2400, daysElapsed: 2,
+      isCurrentMonth: true, reliable: false, projected: 36000, perDay: 1200, daysLeft: 28 },
+    budget: { lines: [], totalBudget: 8160, totalSpent: 2400 },
+  });
+  eq('con pocos días no anuncia que quedarás corto',
+    insightsTempranos.some((o) => /quedar corto/i.test(o.title)), false);
+  eq('en su lugar explica por qué espera',
+    insightsTempranos.some((o) => /muy pronto para proyectar/i.test(o.detail)), true);
+  eq('tampoco dice que una categoría es el 100%',
+    insightsTempranos.some((o) => /se lleva 100%/.test(o.title)), false);
 });
 
 // ------------------------------------------------ mensajes de error

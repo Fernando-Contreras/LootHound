@@ -9,6 +9,7 @@ import * as store from './store.js';
 import * as fin from './finance.js';
 import { renderSetup, renderAuth } from './views/auth.js';
 import { renderDashboard } from './views/dashboard.js';
+import { renderBudget } from './views/budget.js';
 import { renderTransactions } from './views/transactions.js';
 import { renderImport } from './views/import.js';
 import { renderRules } from './views/rules.js';
@@ -35,6 +36,7 @@ const state = {
   rules: [],
   imports: [],
   settings: null,
+  budgets: [],
   accountMap: new Map(),
   categoryMap: new Map(),
   categoryByName: new Map(),
@@ -46,6 +48,7 @@ const state = {
 
 const ROUTES = {
   dashboard: { label: 'Resumen', icon: '◎', render: renderDashboard },
+  presupuesto: { label: 'Presupuesto', icon: '◈', render: renderBudget },
   movimientos: { label: 'Movimientos', icon: '☰', render: renderTransactions },
   importar: { label: 'Importar PDF', icon: '↥', render: renderImport },
   reglas: { label: 'Reglas', icon: '⚙', render: renderRules },
@@ -71,15 +74,18 @@ async function loadData() {
   state.loading = true;
   try {
     await store.ensureSeeded();
-    const [accounts, categories, rules, transactions, imports, settings] = await Promise.all([
-      store.fetchAccounts(),
-      store.fetchCategories(),
-      store.fetchRules(),
-      store.fetchTransactions(),
-      store.fetchImports(),
-      store.fetchSettings(),
-    ]);
+    const [accounts, categories, rules, transactions, imports, settings, budgets] =
+      await Promise.all([
+        store.fetchAccounts(),
+        store.fetchCategories(),
+        store.fetchRules(),
+        store.fetchTransactions(),
+        store.fetchImports(),
+        store.fetchSettings(),
+        store.fetchBudgets(),
+      ]);
     state.settings = settings;
+    state.budgets = budgets ?? [];
     state.accountMap = new Map(accounts.map((a) => [a.id, a]));
     state.categoryMap = new Map(categories.map((c) => [c.id, c]));
     state.categoryByName = new Map(categories.map((c) => [c.name, c]));

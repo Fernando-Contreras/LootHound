@@ -203,6 +203,309 @@ export function comparePeriods(current, previous) {
   };
 }
 
+// ===========================================================================
+// PRESUPUESTO
+//
+// Se calcula solo, a partir de lo que ya gastaste. La idea es no tener que
+// sentarse a inventar números cada mes.
+//
+// Se usa la MEDIANA y no el promedio a propósito: un mes con un viaje o una
+// compra grande jala el promedio hacia arriba y acabaría "presupuestando" ese
+// gasto extraordinario todos los meses. La mediana lo ignora.
+// ===========================================================================
+
+/** Mediana de una lista de números. */
+export function median(nums) {
+  if (!nums.length) return 0;
+  const s = [...nums].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : round2((s[m - 1] + s[m]) / 2);
+}
+
+/**
+ * Sugiere un presupuesto mensual por categoría con base en el historial.
+ *
+ * @param {Array} txs           todos los movimientos
+ * @param {Map} categories      id → categoría
+ * @param {object} options
+ * @param {string} options.upTo mes 'YYYY-MM' hasta el cual mirar (exclusivo)
+ * @param {number} options.months cuántos meses cerrados considerar
+ */
+export function suggestBudget(txs, categories, { upTo = currentMonth(), months = 6 } = {}) {
+  // Sólo meses YA CERRADOS: incluir el mes en curso, que va a la mitad,
+  // arrastraría la sugerencia hacia abajo.
+  const cerrados = [...new Set(txs
+    .filter((t) => t.kind === 'expense')
+    .map((t) => String(t.occurred_on).slice(0, 7))
+    .filter((m) => m < upTo))]
+    .sort()
+    .slice(-months);
+
+  // Primero, cuánto se gastó en cada categoría en cada mes.
+  const gastoPorMes = new Map();          // mes → (categoría → monto)
+  const todasLasCategorias = new Set();
+  for (const mes of cerrados) {
+    const { from, to } = monthRange(mes);
+    const delMes = filterTransactions(txs, { from, to, kinds: ['expense'] });
+    const deEsteMes = new Map();
+    for (const b of byCategory(delMes, 'expense', categories)) {
+      deEsteMes.set(b.id, b.amount);
+      todasLasCategorias.add(b.id);
+    }
+    gastoPorMes.set(mes, deEsteMes);
+  }
+
+  // Después, una serie por categoría con UN valor por mes, rellenando con
+  // cero los meses donde no hubo gasto.
+  //
+  // Ese relleno es lo que hace que la mediana sirva: un viaje que ocurrió una
+  // vez en tres meses da la serie [0, 0, 30000], cuya mediana es 0 — o sea, no
+  // se presupuesta como gasto mensual. Sin el cero quedaría [30000] y parecería
+  // que viajas todos los meses.
+  const porCategoria = new Map();
+  for (const id of todasLasCategorias) {
+    porCategoria.set(id, cerrados.map((mes) => gastoPorMes.get(mes).get(id) ?? 0));
+  }
+
+  const lineas = [...porCategoria.entries()].map(([id, montos]) => {
+    const cat = categories?.get(id);
+    return {
+      category_id: id === '__none__' ? null : id,
+      name: cat?.name || 'Sin categoría',
+      color: cat?.color || '#94a3b8',
+      suggested: round2(median(montos)),
+      average: round2(montos.reduce((a, b) => a + b, 0) / montos.length),
+      max: round2(Math.max(...montos)),
+      months: montos.length,
+    };
+  }).filter((l) => l.suggested > 0)
+    .sort((a, b) => b.suggested - a.suggested);
+
+  return {
+    lines: lineas,
+    total: round2(lineas.reduce((a, l) => a + l.suggested, 0)),
+    monthsUsed: cerrados.length,
+    /** Con uno o dos meses la sugerencia es poco más que una copia. */
+    confidence: cerrados.length >= 4 ? 'alta' : cerrados.length >= 2 ? 'media' : 'baja',
+  };
+}
+
+/** Ingreso mensual típico, para saber contra qué comparar el gasto. */
+export function typicalIncome(txs, { upTo = currentMonth(), months = 6 } = {}) {
+  const porMes = byMonth(txs.filter((t) => t.kind === 'income'))
+    .filter((m) => m.month < upTo)
+    .slice(-months);
+  return {
+    median: round2(median(porMes.map((m) => m.income))),
+    monthsUsed: porMes.length,
+  };
+}
+
+/**
+ * Cómo va el mes contra el presupuesto.
+ * `budget` es un Map de category_id → monto (null = sin tope).
+ */
+export function budgetProgress(monthTxs, budget, categories) {
+  const gastado = byCategory(monthTxs, 'expense', categories);
+  const porId = new Map(gastado.map((g) => [g.id, g]));
+
+  const ids = new Set([...porId.keys(), ...budget.keys()]);
+  const lineas = [...ids].map((id) => {
+    const g = porId.get(id);
+    const limite = budget.get(id) ?? null;
+    const usado = g?.amount ?? 0;
+    const cat = categories?.get(id);
+    return {
+      category_id: id === '__none__' ? null : id,
+      name: cat?.name || g?.name || 'Sin categoría',
+      color: cat?.color || g?.color || '#94a3b8',
+      spent: round2(usado),
+      limit: limite,
+      remaining: limite === null ? null : round2(limite - usado),
+      ratio: limite ? usado / limite : null,
+      over: limite !== null && usado > limite,
+    };
+  }).sort((a, b) => b.spent - a.spent);
+
+  const conLimite = lineas.filter((l) => l.limit !== null);
+  return {
+    lines: lineas,
+    totalSpent: round2(lineas.reduce((a, l) => a + l.spent, 0)),
+    totalBudget: round2(conLimite.reduce((a, l) => a + l.limit, 0)),
+    overCount: lineas.filter((l) => l.over).length,
+  };
+}
+
+/**
+ * Ritmo de gasto: a cómo vas y a dónde llegarías si sigues igual.
+ * Sólo tiene sentido para el mes en curso.
+ */
+export function spendingPace(monthTxs, month) {
+  const { from, to } = monthRange(month);
+  const hoy = todayISO();
+  const esMesActual = month === currentMonth();
+  const corte = esMesActual && hoy < to ? hoy : to;
+
+  const diasTranscurridos = daysBetween(from, corte);
+  const diasDelMes = daysBetween(from, to);
+  const { expense } = summarize(monthTxs);
+
+  const porDia = diasTranscurridos > 0 ? expense / diasTranscurridos : 0;
+  return {
+    spent: round2(expense),
+    perDay: round2(porDia),
+    daysElapsed: diasTranscurridos,
+    daysInMonth: diasDelMes,
+    daysLeft: Math.max(0, diasDelMes - diasTranscurridos),
+    /** A dónde llegaría el mes si el ritmo no cambia. */
+    projected: round2(porDia * diasDelMes),
+    isCurrentMonth: esMesActual,
+    /**
+     * Con pocos días la proyección no significa nada: una compra grande el
+     * día 1 proyecta un mes catastrófico. Por debajo de una semana el número
+     * se muestra, pero no se usa para alarmar.
+     */
+    reliable: !esMesActual || diasTranscurridos >= 7,
+  };
+}
+
+/**
+ * Cuánto de lo que entra te queda. Negativo = gastaste más de lo que ganaste.
+ * Las transferencias no cuentan de ningún lado (ver signedAmount).
+ */
+export function savingsRate(txs) {
+  const { income, expense, net } = summarize(txs);
+  return {
+    income, expense, net,
+    rate: income > 0 ? round2((net / income) * 100) : null,
+  };
+}
+
+/**
+ * Observaciones sobre los números. Nada de consejos de inversión: sólo lo que
+ * los propios datos dicen, con el detalle que lo respalda.
+ *
+ * @returns {Array<{tone, title, detail}>}
+ */
+export function budgetInsights({ monthTxs, prevTxs, categories, income, pace, budget }) {
+  const obs = [];
+  const ahorro = savingsRate(monthTxs);
+  const cats = byCategory(monthTxs, 'expense', categories);
+
+  // --- lo más importante: ¿alcanza? ---------------------------------------
+  const ingresoEsperado = income.median || ahorro.income;
+
+  // Con menos de una semana transcurrida no se proyecta nada: sería alarmar
+  // (o tranquilizar) con ruido. Se dice lo que hay y ya.
+  if (pace.isCurrentMonth && !pace.reliable) {
+    obs.push({
+      tone: 'info',
+      title: `Van ${formatMoney(pace.spent)} en ${pace.daysElapsed} día${pace.daysElapsed === 1 ? '' : 's'}`,
+      detail: 'Todavía es muy pronto para proyectar el mes: una sola compra ' +
+        'grande distorsiona el cálculo. A partir del día 7 aparece la proyección.',
+    });
+  } else if (ingresoEsperado > 0) {
+    const proyectado = pace.isCurrentMonth ? pace.projected : ahorro.expense;
+    const sobra = round2(ingresoEsperado - proyectado);
+    if (sobra < 0) {
+      obs.push({
+        tone: 'bad',
+        title: `Vas a quedar corto por ${formatMoney(Math.abs(sobra))}`,
+        detail: pace.isCurrentMonth
+          ? `Al ritmo actual (${formatMoney(pace.perDay)} al día) el mes cerraría en ` +
+            `${formatMoney(proyectado)}, contra ${formatMoney(ingresoEsperado)} de ingreso típico.`
+          : `Gastaste ${formatMoney(proyectado)} contra ${formatMoney(ingresoEsperado)} de ingreso.`,
+      });
+    } else {
+      obs.push({
+        tone: 'good',
+        title: `Te quedarían ${formatMoney(sobra)} este mes`,
+        detail: `${Math.round((sobra / ingresoEsperado) * 100)}% de tu ingreso típico ` +
+          `(${formatMoney(ingresoEsperado)}).`,
+      });
+    }
+  }
+
+  // --- concentración del gasto --------------------------------------------
+  // Sólo cuando ya hay suficientes movimientos: al día 2, "Comida es el 100%
+  // de tu gasto" es cierto y completamente inútil.
+  if (cats.length && ahorro.expense > 0 && monthTxs.length >= 8) {
+    const top = cats[0];
+    if (top.share >= 0.35) {
+      obs.push({
+        tone: 'warn',
+        title: `${top.name} se lleva ${Math.round(top.share * 100)}% de tu gasto`,
+        detail: `${formatMoney(top.amount)} de ${formatMoney(ahorro.expense)}. ` +
+          'Si quieres mover la aguja, es la categoría con más margen.',
+      });
+    }
+  }
+
+  // --- comparación con el mes anterior ------------------------------------
+  // Sólo si el mes ya lleva camino: comparar dos días contra un mes completo
+  // siempre diría "gastas mucho menos", lo cual no informa nada.
+  if (prevTxs?.length && pace.reliable) {
+    const cmp = comparePeriods(monthTxs, prevTxs);
+    if (cmp.expenseChangePct !== null && Math.abs(cmp.expenseChangePct) >= 15) {
+      const subio = cmp.expenseChangePct > 0;
+      obs.push({
+        tone: subio ? 'warn' : 'good',
+        title: `Gastas ${Math.round(Math.abs(cmp.expenseChangePct))}% ` +
+          `${subio ? 'más' : 'menos'} que el mes pasado`,
+        detail: `${formatMoney(cmp.current.expense)} contra ${formatMoney(cmp.previous.expense)}.`,
+      });
+    }
+  }
+
+  // --- categorías pasadas de su tope --------------------------------------
+  const pasadas = budget?.lines?.filter((l) => l.over) ?? [];
+  for (const l of pasadas.slice(0, 3)) {
+    obs.push({
+      tone: 'warn',
+      title: `${l.name} se pasó ${formatMoney(Math.abs(l.remaining))}`,
+      detail: `Llevas ${formatMoney(l.spent)} de ${formatMoney(l.limit)} presupuestados.`,
+    });
+  }
+
+  // --- cuánto se puede apartar ---------------------------------------------
+  // Aritmética sobre tus propios datos: lo que entra menos lo que gastas de
+  // forma recurrente. No es un consejo de inversión, es una resta.
+  if (income.median > 0 && budget?.totalBudget > 0) {
+    const margen = round2(income.median - budget.totalBudget);
+    if (margen > 0) {
+      obs.push({
+        tone: 'info',
+        title: `Podrías apartar ${formatMoney(margen)} al mes`,
+        detail: `Es lo que sobra entre tu ingreso típico (${formatMoney(income.median)}) ` +
+          `y tu gasto recurrente presupuestado (${formatMoney(budget.totalBudget)}). ` +
+          'Los gastos esporádicos, como un viaje, salen de ahí.',
+      });
+    } else {
+      obs.push({
+        tone: 'bad',
+        title: 'Tu gasto recurrente se come todo el ingreso',
+        detail: `Presupuestas ${formatMoney(budget.totalBudget)} al mes contra ` +
+          `${formatMoney(income.median)} que entran. Sin margen, cualquier ` +
+          'imprevisto se va a deuda.',
+      });
+    }
+  }
+
+  // --- ritmo diario --------------------------------------------------------
+  if (pace.isCurrentMonth && pace.daysLeft > 0 && budget?.totalBudget > 0) {
+    const restante = round2(budget.totalBudget - budget.totalSpent);
+    if (restante > 0) {
+      obs.push({
+        tone: 'info',
+        title: `Te quedan ${formatMoney(restante / pace.daysLeft)} al día`,
+        detail: `${formatMoney(restante)} para los ${pace.daysLeft} días que faltan del mes.`,
+      });
+    }
+  }
+
+  return obs;
+}
+
 // ---------------------------------------------------------------------------
 // Filtros
 // ---------------------------------------------------------------------------
