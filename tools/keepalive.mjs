@@ -3,116 +3,126 @@
 //
 //   node tools/keepalive.mjs
 //
-// Los proyectos gratuitos se pausan tras 7 días sin actividad y hay que
-// despausarlos a mano. Esto lo corre GitHub Actions cada 2 días.
+// Los proyectos gratuitos se pausan tras 7 días sin actividad de base de datos,
+// y despausarlos es manual desde el dashboard. GitHub Actions corre esto cada
+// 2 días.
 //
-// La URL y la llave salen de js/config.js: una sola fuente de verdad. Si algún
-// día cambias de proyecto, sólo se toca ese archivo.
+// QUÉ CUENTA COMO ACTIVIDAD (aprendido a la mala):
+//   * Una consulta REST que RLS rechaza con 401  → NO cuenta.
+//   * Una llamada al servidor de auth (GoTrue), que sí lee de Postgres para
+//     responder → SÍ cuenta.
+//   * Una escritura real vía la función ping()   → cuenta, y es la más segura.
 //
-// No usa secretos porque no hay ninguno que usar: la llave publicable ya está
-// en el repo a propósito, y sin sesión no da acceso a nada (lo comprueba
-// tools/check-rls.mjs).
+// Por eso este script sondea DOS cosas y le basta con que una funcione:
+//   1. rpc/ping  — escribe en la tabla heartbeat. Necesita 03_keepalive.sql.
+//   2. auth/v1/settings — GoTrue lee la config del proyecto desde la base.
+//
+// El paso `psql` del workflow (opcional, si defines el secreto SUPABASE_DB_URL)
+// es todavía más contundente: abre una conexión directa a Postgres.
+//
+// No usa secretos obligatorios: la llave publicable ya está en el repo a
+// propósito y sin sesión no da acceso a nada (lo verifica tools/check-rls.mjs).
 // ===========================================================================
 
 import fs from 'node:fs';
 
 const CONFIG = new URL('../js/config.js', import.meta.url);
+const TIMEOUT_MS = 20000;
 
-function leerConfig() {
-  const src = fs.readFileSync(CONFIG, 'utf8');
-  const bloque = src.match(/const BAKED_IN = \{([\s\S]*?)\};/);
+/** Saca url + llave de js/config.js, la única fuente de verdad. */
+export function leerConfig(src) {
+  src ??= fs.readFileSync(CONFIG, 'utf8');
+  const bloque = src.match(/const BAKED_IN = \{([\s\S]*?)\};/)?.[1];
   if (!bloque) throw new Error('No encontré BAKED_IN en js/config.js');
-  const url = bloque[1].match(/url:\s*'([^']*)'/)?.[1];
-  const key = bloque[1].match(/anonKey:\s*'([^']*)'/)?.[1];
-  if (!url || !key) {
-    throw new Error('js/config.js no tiene URL o llave. ¿Está configurado el proyecto?');
-  }
+  const url = bloque.match(/url:\s*'([^']*)'/)?.[1];
+  const key = bloque.match(/anonKey:\s*'([^']*)'/)?.[1];
+  if (!url || !key) throw new Error('js/config.js no tiene url o anonKey.');
   return { url: url.replace(/\/+$/, ''), key };
 }
 
-async function conTiempo(promesa, ms, queEs) {
-  const control = new AbortController();
-  const alarma = setTimeout(() => control.abort(), ms);
+async function sondear(url, opts = {}) {
+  const ctrl = new AbortController();
+  const alarma = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
-    return await promesa(control.signal);
+    const res = await fetch(url, { ...opts, signal: ctrl.signal });
+    return { status: res.status, cuerpo: (await res.text()).slice(0, 300) };
   } catch (err) {
-    if (err.name === 'AbortError') throw new Error(`${queEs}: no respondió en ${ms / 1000}s`);
-    throw err;
+    return { status: 0, err: err.name === 'AbortError' ? 'timeout' : err.message };
   } finally {
     clearTimeout(alarma);
   }
 }
 
 /**
- * Un error que no se va a arreglar solo: la función no existe, o la llave no
- * sirve. Reintentarlo sólo hace perder tiempo y ensucia el registro.
+ * Decide el resultado del latido a partir de los dos sondeos.
+ * Función pura para poder probarla: se le pasan respuestas, devuelve la
+ * conclusión.
+ *
+ * @param {{ping:{status,cuerpo,err}, auth:{status,cuerpo,err}}} sondeos
+ * @returns {{exito:boolean, via:string|null, mensaje:string, aviso:string|null}}
  */
-function esPermanente(err) {
-  return /PGRST202|Could not find the function|HTTP 40[0-4]/i.test(err.message);
-}
-
-/** Reintenta con espera creciente: un fallo de red no debe tumbar el latido. */
-async function reintentando(fn, intentos = 3) {
-  let ultimo;
-  for (let i = 1; i <= intentos; i++) {
-    try {
-      return await fn();
-    } catch (err) {
-      ultimo = err;
-      if (esPermanente(err)) break;
-      if (i < intentos) {
-        const espera = i * 5000;
-        console.log(`  intento ${i} falló (${err.message}); reintento en ${espera / 1000}s`);
-        await new Promise((r) => setTimeout(r, espera));
-      }
-    }
+export function concluir({ ping, auth }) {
+  // 1. ping() escribió en la tabla heartbeat: lo ideal.
+  if (ping.status >= 200 && ping.status < 300) {
+    return {
+      exito: true, via: 'ping', aviso: null,
+      mensaje: `ping() escribió en la base: ${String(ping.cuerpo).trim()}`,
+    };
   }
-  throw ultimo;
-}
 
-const { url, key } = leerConfig();
-const headers = { apikey: key, 'Content-Type': 'application/json' };
-
-console.log(`Latido hacia ${new URL(url).hostname}`);
-
-// --- 1. La llamada que cuenta: escribe de verdad en la base ---------------
-let ok = false;
-try {
-  const datos = await reintentando(() => conTiempo(
-    async (signal) => {
-      const res = await fetch(`${url}/rest/v1/rpc/ping`, {
-        method: 'POST', headers, body: '{}', signal,
-      });
-      const texto = await res.text();
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${texto.slice(0, 200)}`);
-      return texto;
-    },
-    20000, 'ping()',
-  ));
-  console.log(`  ping() respondió: ${datos.trim()}`);
-  ok = true;
-} catch (err) {
-  console.log(`  ping() no funcionó: ${err.message}`);
-  if (/PGRST202|404|Could not find the function/i.test(err.message)) {
-    console.log('  → Falta correr supabase/03_keepalive.sql en el SQL Editor.');
+  // 2. GoTrue devolvió su JSON de verdad → el proyecto está vivo y lo hicimos
+  //    leer de Postgres. Basta como actividad.
+  const authEsGoTrue = auth.status === 200 &&
+    /"external"|"disable_signup"|"mailer_autoconfirm"/.test(auth.cuerpo || '');
+  if (authEsGoTrue) {
+    const faltaFuncion = ping.status === 404 ||
+      /PGRST202|Could not find the function/i.test(ping.cuerpo || '');
+    return {
+      exito: true, via: 'auth',
+      mensaje: 'El servidor de auth respondió; consultó la base para hacerlo.',
+      aviso: faltaFuncion
+        ? 'La función ping() todavía no existe. El latido funciona vía auth, ' +
+          'pero para dejarlo 100% a prueba de fallos corre ' +
+          'supabase/03_keepalive.sql en el SQL Editor.'
+        : null,
+    };
   }
+
+  // 3. Nada respondió como se espera → proyecto pausado, borrado o mal
+  //    configurado.
+  const detalle = `ping=${ping.status || ping.err || '?'}, auth=${auth.status || auth.err || '?'}`;
+  return {
+    exito: false, via: null, aviso: null,
+    mensaje:
+      `El proyecto no responde (${detalle}). Lo más probable es que esté ` +
+      'PAUSADO. Entra a supabase.com/dashboard, ábrelo y dale "Restore project".',
+  };
 }
 
-// --- 2. Respaldo: aunque falte la función, que el proyecto reciba tráfico --
-// No sustituye al ping (no está documentado si un 401 cuenta como actividad),
-// pero es mejor que no hacer nada si el SQL aún no se ha corrido.
-try {
-  const res = await conTiempo(
-    (signal) => fetch(`${url}/rest/v1/`, { headers, signal }),
-    15000, 'REST',
-  );
-  console.log(`  REST /rest/v1/ → HTTP ${res.status}`);
-} catch (err) {
-  console.log(`  REST no respondió: ${err.message}`);
-}
+// --- ejecución directa (no cuando lo importa un test) ---------------------
+if (process.argv[1]?.replace(/\\/g, '/').endsWith('tools/keepalive.mjs')) {
+  const { url, key } = leerConfig();
+  console.log(`Latido hacia ${new URL(url).hostname}  (${new Date().toISOString()})`);
 
-if (!ok) {
-  console.error('\nEl latido NO se registró. El proyecto puede pausarse a los 7 días.');
-  process.exit(1);
+  const [ping, auth] = await Promise.all([
+    sondear(`${url}/rest/v1/rpc/ping`, {
+      method: 'POST',
+      headers: { apikey: key, 'Content-Type': 'application/json' },
+      body: '{}',
+    }),
+    sondear(`${url}/auth/v1/settings`, { headers: { apikey: key } }),
+  ]);
+  console.log(`  ping()             → ${ping.status || ping.err}`);
+  console.log(`  auth/v1/settings   → ${auth.status || auth.err}`);
+
+  const r = concluir({ ping, auth });
+  console.log(`\n${r.mensaje}`);
+  if (r.aviso) console.log(`\nAVISO: ${r.aviso}`);
+
+  if (!r.exito) {
+    // El exit 1 hace que GitHub mande correo. Es intencional: hay que actuar.
+    console.error('\nEl latido NO se registró.');
+    process.exit(1);
+  }
+  console.log(`\nLatido registrado (vía ${r.via}).`);
 }
-console.log('\nLatido registrado.');

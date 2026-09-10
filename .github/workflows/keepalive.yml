@@ -1,30 +1,37 @@
 # ===========================================================================
 # Mantiene despierto el proyecto de Supabase.
 #
-# Los proyectos del plan gratuito se pausan tras 7 días sin actividad, y
-# despausarlos es manual desde el dashboard. Esto le pega cada 2 días.
+# Los proyectos del plan gratuito se pausan tras 7 días sin actividad de base
+# de datos, y despausarlos es manual desde el dashboard. Esto le pega cada 2
+# días.
 #
 # Por qué cada 2 días y no cada 6:
 # GitHub no garantiza la hora exacta de los cron — bajo carga los retrasa e
 # incluso llega a saltarse alguno. Con 2 días hay tres oportunidades dentro de
 # la ventana de 7, así que perder una no rompe nada.
 #
-# No usa secretos: la llave publicable ya está en el repo a propósito y sin
-# sesión no da acceso a nada. Lo verifica tools/check-rls.mjs.
+# El script (tools/keepalive.mjs) sondea dos cosas y le basta con una:
+#   - rpc/ping        → escribe en la tabla heartbeat (necesita 03_keepalive.sql)
+#   - auth/v1/settings → GoTrue lee la config del proyecto desde Postgres
+#
+# OPCIONAL, lo más contundente: define el secreto SUPABASE_DB_URL con la cadena
+# de conexión "Session pooler" (Project Settings → Database → Connection string)
+# y el paso de psql abre una conexión directa a Postgres cada 2 días. Eso cuenta
+# como actividad sin ninguna duda. Si no defines el secreto, ese paso se salta.
 # ===========================================================================
 name: Latido de Supabase
 
 on:
   schedule:
-    # 07:14 UTC (01:14 en CDMX) los días impares del mes: 1, 3, 5... 31.
+    # 07:14 UTC (01:14 en CDMX) cada 2 días.
     # El minuto 14 es a propósito: en punto es cuando GitHub tiene más cola.
-    # El salto más largo del año es de 3 días (29 de febrero → 1 de marzo),
-    # muy por debajo de los 7 de la ventana.
+    # El salto más largo del año es de 3 días (29 feb → 1 mar), muy por debajo
+    # de los 7 de la ventana.
     - cron: '14 7 */2 * *'
   # Permite dispararlo a mano desde la pestaña Actions para probarlo.
   workflow_dispatch:
 
-# Escritura para el sello mensual del paso de abajo.
+# Escritura para el sello mensual del paso de más abajo.
 permissions:
   contents: write
 
@@ -36,6 +43,9 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      # Vacío si no creaste el secreto; el paso de psql se salta solo.
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
 
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +58,15 @@ jobs:
         with:
           node-version: '20'
 
+      # Lo más contundente, si configuraste el secreto: conexión directa a
+      # Postgres. `psql` viene preinstalado en los runners de Ubuntu.
+      - name: Conexión directa a Postgres (si hay secreto)
+        if: env.SUPABASE_DB_URL != ''
+        run: |
+          psql "$SUPABASE_DB_URL" -Atc "select 'latido ' || now();"
+
+      # Siempre: sondea la API y sirve además de monitor de que el proyecto
+      # sigue en pie.
       - name: Ping a Supabase
         run: node tools/keepalive.mjs
 
@@ -59,8 +78,7 @@ jobs:
       # de falla es silencioso: el robot se apaga, nadie lo nota, y a los 7
       # días Supabase pausa el proyecto. Justo lo que se quería evitar.
       #
-      # Un commit al mes reinicia ese contador. Doce al año no ensucian el
-      # historial, y llevan escrito para qué son.
+      # Un commit el día 1 de cada mes reinicia ese contador.
       # ------------------------------------------------------------------
       - name: Sello mensual para que GitHub no apague el cron
         if: github.event_name == 'schedule'
@@ -88,23 +106,26 @@ jobs:
           GitHub apaga los workflows programados tras 60 días sin ninguna,
           y si este se apaga, Supabase acaba pausando el proyecto."
 
-          # Otro push pudo entrar mientras corría el ping.
           git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
           git push origin "HEAD:${GITHUB_REF_NAME}"
 
-      # Si el ping falla, GitHub manda correo por el job fallido. Este paso
-      # sólo deja el motivo escrito en el resumen del run, para no tener que
-      # abrir los registros.
+      # El ping sólo falla cuando el proyecto NO responde. GitHub ya manda
+      # correo por el job en rojo; este paso deja el motivo y el remedio
+      # escritos en el resumen del run, sin tener que abrir los logs.
       - name: Explicar la falla
         if: failure()
         run: |
           {
-            echo "### El latido falló"
+            echo "### El latido falló: el proyecto de Supabase no respondió"
             echo ""
-            echo "El proyecto de Supabase puede pausarse si esto sigue fallando 7 días."
+            echo "Casi siempre significa que **el proyecto está pausado**."
             echo ""
-            echo "Qué revisar:"
-            echo "- ¿Ya corriste \`supabase/03_keepalive.sql\` en el SQL Editor?"
-            echo "- ¿El proyecto ya está pausado? Despiértalo desde el dashboard."
-            echo "- ¿Cambió la URL o la llave en \`js/config.js\`?"
+            echo "**Qué hacer ahora:**"
+            echo "1. Entra a https://supabase.com/dashboard"
+            echo "2. Abre el proyecto y dale **Restore project** (tarda ~2 min, no pierdes nada)"
+            echo "3. Corre \`supabase/03_keepalive.sql\` en el SQL Editor si aún no lo has hecho"
+            echo ""
+            echo "Si esto se repite, define el secreto \`SUPABASE_DB_URL\` (ver el"
+            echo "comentario en \`.github/workflows/keepalive.yml\`) para un latido"
+            echo "por conexión directa a Postgres, que es a prueba de fallos."
           } >> "$GITHUB_STEP_SUMMARY"

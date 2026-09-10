@@ -16,6 +16,7 @@ import * as id from '../js/parsers/identity.js';
 import * as bbvaDebito from '../js/parsers/bbva-debito.js';
 import * as imp from '../js/views/import.js';
 import * as sup from '../js/supabase.js';
+import * as keepalive from '../tools/keepalive.mjs';
 
 import * as fxBbva from './fixtures/bbva-sintetico.js';
 import * as fxNu from './fixtures/nu-sintetico.js';
@@ -614,6 +615,73 @@ group('los errores dicen qué hacer', () => {
     'Demasiados intentos. Espera un momento.');
   eq('un error desconocido se muestra tal cual',
     sup.authErrorMessage(new Error('algo raro')), 'algo raro');
+});
+
+// ------------------------------------------------ latido de Supabase
+group('el latido decide bien si el proyecto está vivo', () => {
+  const AUTH_OK = {
+    status: 200,
+    cuerpo: '{"external":{"apple":false},"disable_signup":false,"mailer_autoconfirm":false}',
+  };
+
+  // ping() existe y escribió: es lo ideal, no importa lo demás.
+  let r = keepalive.concluir({
+    ping: { status: 200, cuerpo: '"2026-09-10T07:14:00Z"' },
+    auth: { status: 500 },
+  });
+  eq('ping ok → éxito', r.exito, true);
+  eq('ping ok → vía ping', r.via, 'ping');
+  eq('ping ok → sin aviso', r.aviso, null);
+
+  // ping() no existe (falta el SQL) pero GoTrue responde de verdad.
+  r = keepalive.concluir({
+    ping: { status: 404, cuerpo: '{"code":"PGRST202","message":"Could not find the function"}' },
+    auth: AUTH_OK,
+  });
+  eq('sin SQL pero auth vivo → éxito', r.exito, true);
+  eq('vía auth', r.via, 'auth');
+  eq('avisa que falta el SQL', /03_keepalive\.sql/.test(r.aviso || ''), true);
+
+  // Proyecto pausado: nada responde.
+  r = keepalive.concluir({
+    ping: { status: 0, err: 'fetch failed' },
+    auth: { status: 0, err: 'fetch failed' },
+  });
+  eq('todo caído → NO éxito', r.exito, false);
+  eq('nombra que está pausado', /PAUSADO|Restore project/.test(r.mensaje), true);
+
+  // El dominio resuelve pero devuelve una página de error (5xx), no la API.
+  r = keepalive.concluir({
+    ping: { status: 503, cuerpo: '<html>service unavailable</html>' },
+    auth: { status: 503, cuerpo: '<html>service unavailable</html>' },
+  });
+  eq('5xx en todo → NO éxito', r.exito, false);
+
+  // auth responde 200 pero con un placeholder que no es GoTrue.
+  r = keepalive.concluir({
+    ping: { status: 404, cuerpo: 'not found' },
+    auth: { status: 200, cuerpo: '<html>project paused</html>' },
+  });
+  eq('un 200 que no es GoTrue no cuenta', r.exito, false);
+
+  // Timeout en ping, auth bien: sigue contando.
+  r = keepalive.concluir({
+    ping: { status: 0, err: 'timeout' },
+    auth: AUTH_OK,
+  });
+  eq('timeout en ping pero auth vivo → éxito', r.exito, true);
+});
+
+group('leerConfig saca url y llave de config.js', () => {
+  const { url, key } = keepalive.leerConfig(
+    "const BAKED_IN = {\n  url: 'https://abc.supabase.co/',\n  anonKey: 'sb_publishable_XYZ',\n};",
+  );
+  eq('quita la diagonal final', url, 'https://abc.supabase.co');
+  eq('lee la llave', key, 'sb_publishable_XYZ');
+
+  let tiró = false;
+  try { keepalive.leerConfig('const OTRA_COSA = {};'); } catch { tiró = true; }
+  eq('falla si no encuentra BAKED_IN', tiró, true);
 });
 
 // ------------------------------------------------ rompe-caché de módulos

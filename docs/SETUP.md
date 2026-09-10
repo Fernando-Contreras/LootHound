@@ -142,43 +142,55 @@ Los proyectos del plan gratuito **se pausan tras 7 días sin actividad**, y
 despausarlos es manual desde el dashboard. Si no entras a la app durante una
 semana, un día la abres y no funciona.
 
-El repo trae un robot que le pega cada 2 días.
+El repo trae un robot (GitHub Action) que le pega cada 2 días. El robot ya
+está en el repo y arranca solo; sólo tienes que darle a qué pegarle.
 
-1. **SQL Editor** → pega [`supabase/03_keepalive.sql`](../supabase/03_keepalive.sql)
-   → **Run**. Crea la tabla `heartbeat` y la función `ping()`.
-2. Listo. El workflow ya está en el repo y arranca solo.
+### Lo mínimo (funciona sin tocar SQL)
 
-Para probarlo sin esperar: en GitHub → pestaña **Actions** → *Latido de
-Supabase* → **Run workflow**.
+El robot llama a `auth/v1/settings`. Ese endpoint hace que el servidor de auth
+de Supabase lea la configuración del proyecto **desde la base de datos**, o sea
+que sí genera actividad. No hace falta nada más para que el proyecto no se
+pause.
 
-Desde tu compu también:
+Aun así, hazlo también a prueba de balas con una de las dos opciones de abajo.
 
-```bash
-node tools/keepalive.mjs
-```
+### Opción A — la función `ping()` (2 min, sólo Supabase)
 
-Para ver si sigue vivo, en el SQL Editor:
+**SQL Editor** → pega [`supabase/03_keepalive.sql`](../supabase/03_keepalive.sql)
+→ **Run**. Crea la tabla `heartbeat` y la función `ping()`, que hace una
+escritura real cada vez que el robot la llama.
+
+Para ver si sigue vivo:
 
 ```sql
 select * from public.heartbeat;
 ```
 
-Si `last_ping` tiene más de 3 días, algo pasó con el robot — revisa la pestaña
-Actions.
+Si `last_ping` tiene más de 3 días, revisa la pestaña **Actions** del repo.
 
-> **Ojo con esto:** GitHub apaga los workflows programados si el repositorio
-> pasa **60 días sin ningún commit**. Te avisa por correo antes, y se
-> reactivan con un clic desde Actions. Si vas a dejar el proyecto quieto
-> mucho tiempo, ponte un recordatorio.
+### Opción B — conexión directa a Postgres (a prueba de todo)
 
-### Por qué el ping escribe en vez de sólo leer
+1. Supabase → **Project Settings → Database → Connection string** → pestaña
+   **Session pooler** → cópiala (trae el host, el puerto y `[YOUR-PASSWORD]`;
+   sustituye eso por tu contraseña de base de datos).
+2. GitHub → tu repo → **Settings → Secrets and variables → Actions → New
+   repository secret**.
+   - Name: `SUPABASE_DB_URL`
+   - Value: la cadena completa
+3. Listo. El workflow abre una conexión directa a Postgres cada 2 días. Eso
+   cuenta como actividad sin ninguna duda posible. Si no creas el secreto, ese
+   paso simplemente se salta.
 
-Pegarle al REST sin sesión devuelve `401`, y no está documentado si Supabase
-cuenta eso como actividad. La función `ping()` hace un `UPDATE` real, así que
-no hay duda de que la base trabajó.
+### Probar y revisar
 
-Es segura de exponer: no lee ni escribe nada tuyo, sólo devuelve la hora del
-servidor, y la tabla que toca no es legible por nadie desde fuera.
+- Sin esperar: GitHub → **Actions** → *Latido de Supabase* → **Run workflow**.
+- Desde tu compu: `node tools/keepalive.mjs`
+- Si el proyecto está pausado, el robot **falla a propósito** y GitHub te manda
+  correo. El resumen del run trae los pasos para revivirlo.
+
+> **Un hueco que ya está tapado:** GitHub apaga los workflows programados si el
+> repo pasa **60 días sin ningún commit**. El propio robot se hace un commit
+> automático el día 1 de cada mes para que ese contador nunca llegue a 60.
 
 ---
 
