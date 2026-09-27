@@ -619,19 +619,26 @@ group('los errores dicen qué hacer', () => {
 
 // ------------------------------------------------ latido de Supabase
 group('el latido decide bien si el proyecto está vivo', () => {
+  // Datos reales que cambiaron el diseño: el 14-sep se corrió el SQL y
+  // ping() escribió sin problema el 15/17/19/21-sep. El 23-sep el proyecto
+  // ya estaba pausado otra vez. O sea: ping() responder 200 NO es garantía
+  // de que la pausa no vaya a llegar de todos modos — sólo prueba que el
+  // proyecto estaba vivo EN ESE MOMENTO. Por eso ahora siempre avisa.
   const AUTH_OK = {
     status: 200,
     cuerpo: '{"external":{"apple":false},"disable_signup":false,"mailer_autoconfirm":false}',
   };
 
-  // ping() existe y escribió: es lo ideal, no importa lo demás.
+  // ping() existe y escribió: la señal más fuerte disponible, pero se sigue
+  // avisando que no es garantía (ver arriba).
   let r = keepalive.concluir({
     ping: { status: 200, cuerpo: '"2026-09-10T07:14:00Z"' },
     auth: { status: 500 },
   });
   eq('ping ok → éxito', r.exito, true);
   eq('ping ok → vía ping', r.via, 'ping');
-  eq('ping ok → sin aviso', r.aviso, null);
+  eq('aun con ping ok, avisa que no hay garantía',
+    /SUPABASE_DB_URL/.test(r.aviso || ''), true);
 
   // ping() no existe (falta el SQL) pero GoTrue responde de verdad.
   r = keepalive.concluir({
@@ -641,6 +648,7 @@ group('el latido decide bien si el proyecto está vivo', () => {
   eq('sin SQL pero auth vivo → éxito', r.exito, true);
   eq('vía auth', r.via, 'auth');
   eq('avisa que falta el SQL', /03_keepalive\.sql/.test(r.aviso || ''), true);
+  eq('y también que no hay garantía', /SUPABASE_DB_URL/.test(r.aviso || ''), true);
 
   // Proyecto pausado: nada responde.
   r = keepalive.concluir({
@@ -649,6 +657,7 @@ group('el latido decide bien si el proyecto está vivo', () => {
   });
   eq('todo caído → NO éxito', r.exito, false);
   eq('nombra que está pausado', /PAUSADO|Restore project/.test(r.mensaje), true);
+  eq('y recomienda la conexión directa', /SUPABASE_DB_URL/.test(r.mensaje), true);
 
   // El dominio resuelve pero devuelve una página de error (5xx), no la API.
   r = keepalive.concluir({

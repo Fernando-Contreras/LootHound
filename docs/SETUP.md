@@ -145,30 +145,43 @@ semana, un día la abres y no funciona.
 El repo trae un robot (GitHub Action) que le pega cada 2 días. El robot ya
 está en el repo y arranca solo; sólo tienes que darle a qué pegarle.
 
-### Lo mínimo (funciona sin tocar SQL)
+### ⚠️ Lo que NO funcionó (para no repetir el error)
 
-El robot llama a `auth/v1/settings`. Ese endpoint hace que el servidor de auth
-de Supabase lea la configuración del proyecto **desde la base de datos**, o sea
-que sí genera actividad. No hace falta nada más para que el proyecto no se
-pause.
+La primera versión de este robot llamaba a `rpc/ping()` (una función que
+escribe en la base) y a `auth/v1/settings`, apostando a que cualquiera de las
+dos contaría como "actividad" para Supabase. **No fue así.** Con datos reales:
 
-Aun así, hazlo también a prueba de balas con una de las dos opciones de abajo.
+```
+14-sep  se corre el SQL, ping() empieza a funcionar
+15-sep  ping() OK
+17-sep  ping() OK
+19-sep  ping() OK
+21-sep  ping() OK          ← 4 veces seguidas, el proyecto vivo
+23-sep  proyecto YA PAUSADO otra vez
+```
 
-### Opción A — la función `ping()` (2 min, sólo Supabase)
+O sea: que `ping()` responda bien no es garantía de nada. Pasó dos veces
+seguidas con métodos distintos. **La única opción de abajo con evidencia real
+de que funciona es la B.** Haz esa.
+
+### Opción A — la función `ping()` (2 min, sólo sirve de monitor)
+
+Sin evidencia de prevenir la pausa (ver arriba), pero sirve para que el robot
+sepa avisar si el proyecto se cayó, y para ver en Supabase cuándo fue el
+último latido.
 
 **SQL Editor** → pega [`supabase/03_keepalive.sql`](../supabase/03_keepalive.sql)
-→ **Run**. Crea la tabla `heartbeat` y la función `ping()`, que hace una
-escritura real cada vez que el robot la llama.
-
-Para ver si sigue vivo:
+→ **Run**. Crea la tabla `heartbeat` y la función `ping()`.
 
 ```sql
 select * from public.heartbeat;
 ```
 
-Si `last_ping` tiene más de 3 días, revisa la pestaña **Actions** del repo.
+### Opción B — conexión directa a Postgres (haz ésta)
 
-### Opción B — conexión directa a Postgres (a prueba de todo)
+Abre una conexión de verdad a la base de datos (no una llamada HTTP), que es
+lo que la comunidad de Supabase recomienda para esto y lo único que no había
+probado antes.
 
 1. Supabase → **Project Settings → Database → Connection string** → pestaña
    **Session pooler** → cópiala (trae el host, el puerto y `[YOUR-PASSWORD]`;
@@ -177,9 +190,8 @@ Si `last_ping` tiene más de 3 días, revisa la pestaña **Actions** del repo.
    repository secret**.
    - Name: `SUPABASE_DB_URL`
    - Value: la cadena completa
-3. Listo. El workflow abre una conexión directa a Postgres cada 2 días. Eso
-   cuenta como actividad sin ninguna duda posible. Si no creas el secreto, ese
-   paso simplemente se salta.
+3. Listo. El workflow abre esa conexión cada 2 días. Si no creas el secreto,
+   ese paso simplemente se salta y el robot queda sólo como monitor (opción A).
 
 ### Probar y revisar
 
@@ -187,6 +199,8 @@ Si `last_ping` tiene más de 3 días, revisa la pestaña **Actions** del repo.
 - Desde tu compu: `node tools/keepalive.mjs`
 - Si el proyecto está pausado, el robot **falla a propósito** y GitHub te manda
   correo. El resumen del run trae los pasos para revivirlo.
+- Si el secreto `SUPABASE_DB_URL` está mal (contraseña vieja, etc.), el paso de
+  `psql` falla primero y de forma más clara que el resto.
 
 > **Un hueco que ya está tapado:** GitHub apaga los workflows programados si el
 > repo pasa **60 días sin ningún commit**. El propio robot se hace un commit

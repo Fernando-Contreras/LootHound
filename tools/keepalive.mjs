@@ -7,21 +7,28 @@
 // y despausarlos es manual desde el dashboard. GitHub Actions corre esto cada
 // 2 días.
 //
-// QUÉ CUENTA COMO ACTIVIDAD (aprendido a la mala):
-//   * Una consulta REST que RLS rechaza con 401  → NO cuenta.
-//   * Una llamada al servidor de auth (GoTrue), que sí lee de Postgres para
-//     responder → SÍ cuenta.
-//   * Una escritura real vía la función ping()   → cuenta, y es la más segura.
+// QUÉ CUENTA COMO ACTIVIDAD (aprendido a la mala, con datos reales):
+//   * Una consulta REST que RLS rechaza con 401       → NO cuenta.
+//   * Una llamada al servidor de auth (GoTrue)        → no se sabe con certeza.
+//   * Una escritura real vía rpc/ping() por PostgREST → TAMPOCO PARECE BASTAR.
 //
-// Por eso este script sondea DOS cosas y le basta con que una funcione:
-//   1. rpc/ping  — escribe en la tabla heartbeat. Necesita 03_keepalive.sql.
-//   2. auth/v1/settings — GoTrue lee la config del proyecto desde la base.
+// El 14-sep se corrió 03_keepalive.sql y ping() escribió sin problema cuatro
+// veces seguidas (15, 17, 19, 21-sep). El 23-sep el proyecto ya estaba pausado
+// otra vez — 9 días después de la última vez que alguien entró al dashboard,
+// pero sólo 2 días después del último ping() exitoso. Eso apunta a que
+// Supabase mide "actividad" por conexiones reales a Postgres (o por uso del
+// dashboard), no por llamadas a PostgREST, aunque esas llamadas sí escriban.
 //
-// El paso `psql` del workflow (opcional, si defines el secreto SUPABASE_DB_URL)
-// es todavía más contundente: abre una conexión directa a Postgres.
+// Por eso este script ya NO es la defensa principal: sondea rpc/ping() y
+// auth/v1/settings como monitor (para avisar si el proyecto se cayó), pero la
+// única vía con evidencia de funcionar es el paso `psql` del workflow, que
+// abre una conexión de verdad a Postgres — necesita el secreto
+// SUPABASE_DB_URL (ver .github/workflows/keepalive.yml). Sin ese secreto, no
+// hay garantía real de que esto evite la próxima pausa.
 //
-// No usa secretos obligatorios: la llave publicable ya está en el repo a
-// propósito y sin sesión no da acceso a nada (lo verifica tools/check-rls.mjs).
+// No usa secretos obligatorios para el sondeo: la llave publicable ya está en
+// el repo a propósito y sin sesión no da acceso a nada (lo verifica
+// tools/check-rls.mjs).
 // ===========================================================================
 
 import fs from 'node:fs';
@@ -61,17 +68,31 @@ async function sondear(url, opts = {}) {
  * @param {{ping:{status,cuerpo,err}, auth:{status,cuerpo,err}}} sondeos
  * @returns {{exito:boolean, via:string|null, mensaje:string, aviso:string|null}}
  */
+// Nota fija: ni ping() ni auth/v1/settings tienen evidencia de prevenir la
+// pausa (ver el comentario de arriba con la línea de tiempo real). Se avisa
+// SIEMPRE que se tenga éxito por esta vía, no sólo la primera vez, porque el
+// riesgo de que la próxima pausa agarre desprevenido sigue ahí hasta que
+// exista una conexión directa a Postgres (SUPABASE_DB_URL).
+const AVISO_SIN_GARANTIA =
+  'Este sondeo (PostgREST/auth) NO tiene evidencia de prevenir la pausa de ' +
+  'Supabase — ya pasó que funcionó varios días y aun así el proyecto se ' +
+  'pausó. La única vía con evidencia real es una conexión directa a ' +
+  'Postgres: define el secreto SUPABASE_DB_URL (ver el comentario en ' +
+  '.github/workflows/keepalive.yml) para que el paso de psql se active.';
+
 export function concluir({ ping, auth }) {
-  // 1. ping() escribió en la tabla heartbeat: lo ideal.
+  // 1. ping() escribió en la tabla heartbeat: es la señal más fuerte posible
+  //    por esta vía, pero "por esta vía" ya no es sinónimo de "garantizada".
   if (ping.status >= 200 && ping.status < 300) {
     return {
-      exito: true, via: 'ping', aviso: null,
+      exito: true, via: 'ping', aviso: AVISO_SIN_GARANTIA,
       mensaje: `ping() escribió en la base: ${String(ping.cuerpo).trim()}`,
     };
   }
 
   // 2. GoTrue devolvió su JSON de verdad → el proyecto está vivo y lo hicimos
-  //    leer de Postgres. Basta como actividad.
+  //    leer de Postgres. Es la señal de que el proyecto sigue en pie, aunque
+  //    tampoco haya evidencia de que esto por sí solo evite la pausa.
   const authEsGoTrue = auth.status === 200 &&
     /"external"|"disable_signup"|"mailer_autoconfirm"/.test(auth.cuerpo || '');
   if (authEsGoTrue) {
@@ -81,10 +102,9 @@ export function concluir({ ping, auth }) {
       exito: true, via: 'auth',
       mensaje: 'El servidor de auth respondió; consultó la base para hacerlo.',
       aviso: faltaFuncion
-        ? 'La función ping() todavía no existe. El latido funciona vía auth, ' +
-          'pero para dejarlo 100% a prueba de fallos corre ' +
-          'supabase/03_keepalive.sql en el SQL Editor.'
-        : null,
+        ? 'La función ping() todavía no existe (corre supabase/03_keepalive.sql). ' +
+          AVISO_SIN_GARANTIA
+        : AVISO_SIN_GARANTIA,
     };
   }
 
@@ -95,7 +115,10 @@ export function concluir({ ping, auth }) {
     exito: false, via: null, aviso: null,
     mensaje:
       `El proyecto no responde (${detalle}). Lo más probable es que esté ` +
-      'PAUSADO. Entra a supabase.com/dashboard, ábrelo y dale "Restore project".',
+      'PAUSADO. Entra a supabase.com/dashboard, ábrelo y dale "Restore project". ' +
+      'Ya pasó antes con el sondeo por PostgREST funcionando varios días y aun ' +
+      'así pausándose: si esto se repite, define SUPABASE_DB_URL para el paso ' +
+      'de psql — es la única vía con evidencia real de prevenirlo.',
   };
 }
 

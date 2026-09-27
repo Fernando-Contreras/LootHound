@@ -1,23 +1,34 @@
 # ===========================================================================
 # Mantiene despierto el proyecto de Supabase.
 #
-# Los proyectos del plan gratuito se pausan tras 7 días sin actividad de base
-# de datos, y despausarlos es manual desde el dashboard. Esto le pega cada 2
-# días.
+# Los proyectos del plan gratuito se pausan tras 7 días sin actividad, y
+# despausarlos es manual desde el dashboard. Esto le pega cada 2 días.
 #
-# Por qué cada 2 días y no cada 6:
-# GitHub no garantiza la hora exacta de los cron — bajo carga los retrasa e
-# incluso llega a saltarse alguno. Con 2 días hay tres oportunidades dentro de
-# la ventana de 7, así que perder una no rompe nada.
+# HISTORIAL REAL (por qué el diseño cambió):
+# El 14-sep se corrió 03_keepalive.sql y rpc/ping() escribió sin problema
+# cuatro veces seguidas (15/17/19/21-sep). El 23-sep el proyecto YA ESTABA
+# PAUSADO otra vez. O sea: una escritura real vía PostgREST no fue garantía de
+# evitar la pausa. Pasó dos veces con enfoques distintos (401 por RLS, y luego
+# un ping que sí escribía) — así que ya no se confía en nada que pase por la
+# API HTTP para esto.
 #
-# El script (tools/keepalive.mjs) sondea dos cosas y le basta con una:
-#   - rpc/ping        → escribe en la tabla heartbeat (necesita 03_keepalive.sql)
-#   - auth/v1/settings → GoTrue lee la config del proyecto desde Postgres
+# LA DEFENSA REAL: el paso `psql` de abajo, que abre una conexión DIRECTA a
+# Postgres (protocolo de base de datos, no HTTP). Es el mismo mecanismo que
+# recomienda la comunidad de Supabase para esto, y lo único que no se ha usado
+# todavía. Necesita el secreto SUPABASE_DB_URL:
 #
-# OPCIONAL, lo más contundente: define el secreto SUPABASE_DB_URL con la cadena
-# de conexión "Session pooler" (Project Settings → Database → Connection string)
-# y el paso de psql abre una conexión directa a Postgres cada 2 días. Eso cuenta
-# como actividad sin ninguna duda. Si no defines el secreto, ese paso se salta.
+#   1. Supabase → Project Settings → Database → Connection string →
+#      pestaña "Session pooler" → copiar (cambiar [YOUR-PASSWORD] por tu
+#      contraseña real de base de datos).
+#   2. GitHub → este repo → Settings → Secrets and variables → Actions →
+#      New repository secret → nombre SUPABASE_DB_URL, pegar el valor.
+#
+# Sin ese secreto, el paso se salta y este workflow queda como monitor nada
+# más: avisa si el proyecto se cae, pero no hay evidencia de que lo prevenga.
+#
+# Por qué cada 2 días y no cada 6: GitHub no garantiza la hora exacta de los
+# cron — bajo carga los retrasa e incluso llega a saltarse alguno. Con 2 días
+# hay tres oportunidades dentro de la ventana de 7.
 # ===========================================================================
 name: Latido de Supabase
 
@@ -120,12 +131,15 @@ jobs:
             echo ""
             echo "Casi siempre significa que **el proyecto está pausado**."
             echo ""
-            echo "**Qué hacer ahora:**"
+            echo "**Ahora mismo, para volver a entrar:**"
             echo "1. Entra a https://supabase.com/dashboard"
             echo "2. Abre el proyecto y dale **Restore project** (tarda ~2 min, no pierdes nada)"
-            echo "3. Corre \`supabase/03_keepalive.sql\` en el SQL Editor si aún no lo has hecho"
             echo ""
-            echo "Si esto se repite, define el secreto \`SUPABASE_DB_URL\` (ver el"
-            echo "comentario en \`.github/workflows/keepalive.yml\`) para un latido"
-            echo "por conexión directa a Postgres, que es a prueba de fallos."
+            echo "**Para que esto no se repita:** el sondeo por PostgREST ya"
+            echo "demostró que NO evita la pausa (funcionó varios días seguidos y"
+            echo "aun así se pausó). La única vía con evidencia real es una"
+            echo "conexión directa a Postgres. Define el secreto"
+            echo "\`SUPABASE_DB_URL\` — los pasos exactos están en el comentario"
+            echo "de arriba de \`.github/workflows/keepalive.yml\` y en"
+            echo "\`docs/SETUP.md\`."
           } >> "$GITHUB_STEP_SUMMARY"
