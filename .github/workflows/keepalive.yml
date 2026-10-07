@@ -33,12 +33,19 @@
 name: Latido de Supabase
 
 on:
-  schedule:
-    # 07:14 UTC (01:14 en CDMX) cada 2 días.
-    # El minuto 14 es a propósito: en punto es cuando GitHub tiene más cola.
-    # El salto más largo del año es de 3 días (29 feb → 1 mar), muy por debajo
-    # de los 7 de la ventana.
-    - cron: '14 7 */2 * *'
+  # HORARIO APAGADO desde 2026-10-07. Juan usa LootHound 1-2 veces al mes y lo
+  # pausa/restaura a mano para respetar el tope de 2 proyectos gratis; con el
+  # proyecto pausado, este robot sólo fallaba cada 2 días y mandaba correos.
+  # Para reactivarlo (p. ej. si se sube a Pro o se define SUPABASE_DB_URL),
+  # descomenta las 6 líneas de abajo.
+  #
+  # schedule:
+  #   # 07:14 UTC (01:14 en CDMX) cada 2 días.
+  #   # El minuto 14 es a propósito: en punto es cuando GitHub tiene más cola.
+  #   # El salto más largo del año es de 3 días (29 feb → 1 mar), muy por debajo
+  #   # de los 7 de la ventana.
+  #   - cron: '14 7 */2 * *'
+  #
   # Permite dispararlo a mano desde la pestaña Actions para probarlo.
   workflow_dispatch:
 
