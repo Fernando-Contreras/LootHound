@@ -506,6 +506,332 @@ export function budgetInsights({ monthTxs, prevTxs, categories, income, pace, bu
   return obs;
 }
 
+// ===========================================================================
+// INVERSIONES
+//
+// Modelo (ver supabase/05_inversiones.sql):
+//   flows   cada vez que metes (deposit) o sacas (withdrawal) dinero
+//   values  "fotos" del valor de cada plataforma en una fecha
+//
+// De ahí sale todo lo demás. Lo que antes eran celdas del Excel:
+//   Mensual           → monthNet      (lo que metiste ESTE mes)
+//   Inversión actual  → value         (la foto más reciente)
+//   Le metí           → contributed   (todo lo que has metido, menos lo que sacaste)
+// y lo que el Excel no calculaba: ganancia, % de rendimiento, rendimiento
+// anualizado, peso de cada plataforma, avance contra tu meta, historial.
+// ===========================================================================
+
+const signedFlow = (f) => (f.kind === 'withdrawal' ? -Number(f.amount) : Number(f.amount));
+
+/** Diferencia en días entre dos fechas ISO (b - a), sin pasar por zonas horarias. */
+export function dayDiff(aISO, bISO) {
+  return Math.round((Date.parse(`${bISO}T00:00:00Z`) - Date.parse(`${aISO}T00:00:00Z`)) / 86400000);
+}
+
+/** La foto de valor más reciente de una plataforma hasta `asOf` (inclusive). */
+export function latestValue(values, investmentId, asOf = todayISO()) {
+  let best = null;
+  for (const v of values) {
+    if (v.investment_id !== investmentId || v.as_of > asOf) continue;
+    if (!best || v.as_of > best.as_of) best = v;
+  }
+  return best ? { value: Number(best.value), as_of: best.as_of } : null;
+}
+
+/**
+ * Rendimiento anualizado de verdad (XIRR): tiene en cuenta CUÁNDO metiste cada
+ * peso. Meter $10,000 hace un año y $10,000 ayer no rinde igual que meter
+ * $20,000 hace un año, y el "ganancia / aportado" simple no lo distingue.
+ *
+ * Resuelve  Σ flujo_i / (1+r)^(años_i) = 0  por bisección: no puede divergir
+ * como el método de Newton con flujos raros.
+ *
+ * @param {Array<{date:string, amount:number}>} flows  aportaciones en NEGATIVO
+ *        (salen de tu bolsillo), retiros y valor final en POSITIVO.
+ * @returns {number|null} tasa anual (0.12 = 12%), o null si no es calculable
+ */
+export function xirr(flows) {
+  const cf = flows.filter((f) => f.amount !== 0 && f.date);
+  if (cf.length < 2) return null;
+  if (!cf.some((f) => f.amount < 0) || !cf.some((f) => f.amount > 0)) return null;
+
+  const t0 = cf.reduce((m, f) => (f.date < m ? f.date : m), cf[0].date);
+  const years = cf.map((f) => ({ amount: f.amount, t: dayDiff(t0, f.date) / 365 }));
+  const f = (r) => years.reduce((acc, y) => acc + y.amount / Math.pow(1 + r, y.t), 0);
+
+  let lo = -0.9999;
+  let hi = 100;                       // 10,000% anual: techo de sobra
+  let flo = f(lo);
+  const fhi = f(hi);
+  if (!Number.isFinite(flo) || !Number.isFinite(fhi) || flo * fhi > 0) return null;
+
+  for (let i = 0; i < 200; i++) {
+    const mid = (lo + hi) / 2;
+    const fm = f(mid);
+    if (Math.abs(fm) < 1e-9 || (hi - lo) < 1e-12) return mid;
+    if (flo * fm < 0) hi = mid; else { lo = mid; flo = fm; }
+  }
+  return (lo + hi) / 2;
+}
+
+/** Con menos historia que esto, anualizar es ruido: un +2% en 3 semanas "es" 40% al año. */
+export const MIN_DAYS_FOR_ANNUALIZED = 90;
+/** Un valor más viejo que esto ya no es "el valor actual". */
+export const STALE_DAYS = 30;
+
+/**
+ * Resumen completo de inversiones.
+ *
+ * @param {object} p
+ * @param {Array} p.accounts   plataformas
+ * @param {Array} p.flows      aportaciones/retiros
+ * @param {Array} p.values     fotos de valor
+ * @param {string} p.month     'YYYY-MM' para "lo de este mes"
+ * @param {string} p.asOf      fecha de corte (por omisión hoy)
+ * @param {number|null} p.goal meta mensual de inversión
+ */
+export function investmentSummary({
+  accounts = [], flows = [], values = [], month = currentMonth(), asOf = todayISO(), goal = null,
+}) {
+  const { from: mFrom, to: mTo } = monthRange(month);
+  const activas = accounts.filter((a) => !a.archived);
+
+  const rows = activas.map((a) => {
+    const mine = flows.filter((f) => f.investment_id === a.id && f.occurred_on <= asOf);
+    const deposited = round2(mine.filter((f) => f.kind === 'deposit').reduce((s, f) => s + Number(f.amount), 0));
+    const withdrawn = round2(mine.filter((f) => f.kind === 'withdrawal').reduce((s, f) => s + Number(f.amount), 0));
+    const contributed = round2(deposited - withdrawn);
+    const monthNet = round2(mine.filter((f) => f.occurred_on >= mFrom && f.occurred_on <= mTo)
+      .reduce((s, f) => s + signedFlow(f), 0));
+    const last = latestValue(values, a.id, asOf);
+    const value = last ? last.value : null;
+
+    // Sólo hay ganancia que calcular si sabemos cuánto metiste y cuánto vale.
+    const tracked = deposited > 0 && value !== null;
+    const gain = tracked ? round2(value - contributed) : null;
+    const returnPct = tracked && contributed > 0 ? round2((gain / contributed) * 100) : null;
+
+    // Rendimiento anualizado: sólo con historia suficiente.
+    let annualized = null;
+    if (tracked && mine.length) {
+      const first = mine.reduce((m, f) => (f.occurred_on < m ? f.occurred_on : m), mine[0].occurred_on);
+      if (dayDiff(first, last.as_of) >= MIN_DAYS_FOR_ANNUALIZED) {
+        annualized = xirr([
+          ...mine.filter((f) => f.occurred_on <= last.as_of)
+            .map((f) => ({ date: f.occurred_on, amount: -signedFlow(f) })),
+          { date: last.as_of, amount: value },
+        ]);
+      }
+    }
+
+    const daysSinceValue = last ? dayDiff(last.as_of, asOf) : null;
+    return {
+      id: a.id, name: a.name, type: a.type, sort_order: a.sort_order,
+      deposited, withdrawn, contributed, monthNet,
+      value, valueDate: last ? last.as_of : null,
+      daysSinceValue, stale: last ? daysSinceValue > STALE_DAYS : false,
+      hasValue: value !== null,
+      tracked, gain, returnPct, annualized,
+      share: 0,   // se llena abajo, cuando ya se conoce el total
+    };
+  }).sort((a, b) => (b.value ?? -1) - (a.value ?? -1));
+
+  const totalValue = round2(rows.reduce((s, r) => s + (r.value ?? 0), 0));
+  for (const r of rows) r.share = totalValue > 0 && r.value !== null ? r.value / totalValue : 0;
+
+  // Totales de lo que SÍ se puede seguir (tienen aportaciones y valor): sumar el
+  // valor de una cuenta de ahorro sin aportaciones registradas contra "lo que
+  // metiste" daría una ganancia inventada.
+  const trackedRows = rows.filter((r) => r.tracked);
+  const trackedValue = round2(trackedRows.reduce((s, r) => s + r.value, 0));
+  const trackedContributed = round2(trackedRows.reduce((s, r) => s + r.contributed, 0));
+  const gain = round2(trackedValue - trackedContributed);
+  const returnPct = trackedContributed > 0 ? round2((gain / trackedContributed) * 100) : null;
+
+  let annualized = null;
+  const spans = trackedRows.filter((r) => r.valueDate).map((r) => {
+    const mine = flows.filter((f) => f.investment_id === r.id && f.occurred_on <= r.valueDate);
+    return { r, mine };
+  });
+  const firstDates = spans.flatMap(({ mine }) => mine.map((f) => f.occurred_on)).sort();
+  const lastDate = trackedRows.map((r) => r.valueDate).sort().pop();
+  if (firstDates.length && lastDate && dayDiff(firstDates[0], lastDate) >= MIN_DAYS_FOR_ANNUALIZED) {
+    annualized = xirr([
+      ...spans.flatMap(({ mine }) => mine.map((f) => ({ date: f.occurred_on, amount: -signedFlow(f) }))),
+      ...trackedRows.map((r) => ({ date: r.valueDate, amount: r.value })),
+    ]);
+  }
+
+  // --- por tipo (ahorro / bolsa / cripto / otro) ----------------------------
+  const byType = new Map();
+  for (const r of rows) {
+    if (r.value === null) continue;
+    byType.set(r.type, (byType.get(r.type) ?? 0) + r.value);
+  }
+  const typeBreakdown = [...byType.entries()]
+    .map(([type, value]) => ({ type, value: round2(value), share: totalValue > 0 ? value / totalValue : 0 }))
+    .sort((a, b) => b.value - a.value);
+
+  // --- este mes --------------------------------------------------------------
+  const monthNet = round2(rows.reduce((s, r) => s + r.monthNet, 0));
+  const monthGoal = goal !== null && goal !== undefined && Number(goal) > 0 ? Number(goal) : null;
+  const goalProgress = monthGoal === null ? null : {
+    goal: monthGoal,
+    done: monthNet,
+    pct: Math.round((monthNet / monthGoal) * 100),
+    remaining: round2(Math.max(0, monthGoal - monthNet)),
+    reached: monthNet >= monthGoal,
+  };
+
+  return {
+    rows,
+    totals: {
+      value: totalValue,
+      contributed: round2(rows.reduce((s, r) => s + r.contributed, 0)),
+      trackedValue, trackedContributed, gain, returnPct, annualized,
+      monthNet,
+      untrackedValue: round2(totalValue - trackedValue),
+    },
+    typeBreakdown,
+    goalProgress,
+    count: rows.length,
+  };
+}
+
+/** Aportaciones netas por mes, de más viejo a más nuevo, siempre con N meses (los vacíos en 0). */
+export function monthlyContributions(flows, endMonth = currentMonth(), months = 12) {
+  const keys = [];
+  let m = endMonth;
+  for (let i = 0; i < months; i++) { keys.unshift(m); m = previousMonth(m); }
+  const out = new Map(keys.map((k) => [k, { month: k, deposits: 0, withdrawals: 0, net: 0 }]));
+  for (const f of flows) {
+    const row = out.get(String(f.occurred_on).slice(0, 7));
+    if (!row) continue;
+    if (f.kind === 'withdrawal') row.withdrawals += Number(f.amount);
+    else row.deposits += Number(f.amount);
+  }
+  return keys.map((k) => {
+    const r = out.get(k);
+    return { month: k, deposits: round2(r.deposits), withdrawals: round2(r.withdrawals),
+      net: round2(r.deposits - r.withdrawals) };
+  });
+}
+
+/**
+ * Cómo ha evolucionado el total: en cada fecha en que hay una foto de valor,
+ * cuánto valía todo (con el último valor conocido de cada plataforma) y cuánto
+ * habías metido hasta ese día. La diferencia entre las dos líneas ES la ganancia.
+ */
+export function valueHistory(accounts, flows, values) {
+  const ids = new Set(accounts.filter((a) => !a.archived).map((a) => a.id));
+  const dates = [...new Set(values.filter((v) => ids.has(v.investment_id)).map((v) => v.as_of))].sort();
+  return dates.map((date) => {
+    let value = 0;
+    for (const id of ids) value += latestValue(values, id, date)?.value ?? 0;
+    const contributed = flows
+      .filter((f) => ids.has(f.investment_id) && f.occurred_on <= date)
+      .reduce((s, f) => s + signedFlow(f), 0);
+    return { date, value: round2(value), contributed: round2(contributed) };
+  });
+}
+
+/**
+ * Observaciones sobre las inversiones. Sólo aritmética sobre tus propios
+ * números: nada de "compra esto" ni "vende aquello".
+ *
+ * @param {object} summary   resultado de investmentSummary()
+ * @param {object} extra     { monthIncome } ingreso del mes, para la tasa de inversión
+ */
+export function investmentInsights(summary, { monthIncome = 0, isCurrentMonth = false, daysLeft = 0 } = {}) {
+  const out = [];
+  const { rows, totals, typeBreakdown, goalProgress } = summary;
+  if (!rows.length) return out;
+
+  // --- meta mensual ---------------------------------------------------------
+  if (goalProgress) {
+    if (goalProgress.reached) {
+      out.push({ tone: 'good', title: `Meta del mes cumplida (${formatMoney(goalProgress.done)})`,
+        detail: `Tu meta era ${formatMoney(goalProgress.goal)}.` });
+    } else {
+      out.push({ tone: isCurrentMonth ? 'info' : 'warn',
+        title: `Llevas ${formatMoney(goalProgress.done)} de ${formatMoney(goalProgress.goal)} (${Math.max(0, goalProgress.pct)}%)`,
+        detail: isCurrentMonth && daysLeft > 0
+          ? `Te faltan ${formatMoney(goalProgress.remaining)} y quedan ${daysLeft} días del mes.`
+          : `Faltaron ${formatMoney(goalProgress.remaining)} para llegar a la meta.` });
+    }
+  }
+
+  // --- cuánto de lo que ganaste se fue a invertir ------------------------------
+  if (monthIncome > 0 && totals.monthNet > 0) {
+    out.push({ tone: 'info',
+      title: `Invertiste el ${Math.round((totals.monthNet / monthIncome) * 100)}% de lo que ganaste este mes`,
+      detail: `${formatMoney(totals.monthNet)} de ${formatMoney(monthIncome)} de ingresos.` });
+  } else if (totals.monthNet < 0) {
+    out.push({ tone: 'info', title: `Este mes sacaste ${formatMoney(-totals.monthNet)} más de lo que metiste`,
+      detail: 'Los retiros superan a las aportaciones del mes.' });
+  }
+
+  // --- concentración -----------------------------------------------------------
+  const conValor = rows.filter((r) => r.value !== null && r.value > 0);
+  if (conValor.length > 1) {
+    const top = conValor[0];
+    if (top.share >= 0.5) {
+      out.push({ tone: 'warn', title: `${top.name} concentra el ${Math.round(top.share * 100)}% de lo que tienes`,
+        detail: `${formatMoney(top.value)} de ${formatMoney(totals.value)}. Todo en un solo lugar depende de que ese lugar vaya bien.` });
+    }
+  }
+
+  // --- mezcla por tipo ------------------------------------------------------------
+  const cripto = typeBreakdown.find((t) => t.type === 'cripto');
+  if (cripto && cripto.share >= 0.2) {
+    out.push({ tone: 'warn', title: `Cripto pesa el ${Math.round(cripto.share * 100)}% de tu patrimonio invertido`,
+      detail: 'Es la parte más volátil: puede subir o bajar mucho de un mes a otro.' });
+  }
+  const ahorro = typeBreakdown.find((t) => t.type === 'ahorro');
+  if (typeBreakdown.length) {
+    out.push({ tone: 'info',
+      title: 'Tu mezcla: ' + typeBreakdown.map((t) => `${TYPE_LABELS[t.type] ?? t.type} ${Math.round(t.share * 100)}%`).join(' · '),
+      detail: ahorro ? `${formatMoney(ahorro.value)} en cuentas de ahorro con rendimiento diario y liquidez.` : '' });
+  }
+
+  // --- perdedoras y ganadoras ------------------------------------------------------
+  const seguidas = rows.filter((r) => r.tracked && r.returnPct !== null);
+  for (const r of seguidas.filter((x) => x.returnPct <= -10).sort((a, b) => a.returnPct - b.returnPct).slice(0, 3)) {
+    out.push({ tone: 'warn', title: `${r.name} va ${r.returnPct.toFixed(1)}%`,
+      detail: `Has metido ${formatMoney(r.contributed)} y hoy vale ${formatMoney(r.value)} (${formatMoney(r.gain)}).` });
+  }
+  const mejor = [...seguidas].sort((a, b) => b.returnPct - a.returnPct)[0];
+  if (mejor && mejor.returnPct > 0) {
+    out.push({ tone: 'good', title: `${mejor.name} es tu mejor plataforma: +${mejor.returnPct.toFixed(1)}%`,
+      detail: `${formatMoney(mejor.gain)} de ganancia sobre ${formatMoney(mejor.contributed)}.` });
+  }
+
+  // --- valores desactualizados ---------------------------------------------------------
+  const viejas = rows.filter((r) => r.hasValue && r.stale);
+  if (viejas.length) {
+    out.push({ tone: 'info', title: `Actualiza el valor de: ${viejas.map((r) => r.name).join(', ')}`,
+      detail: viejas.map((r) => `${r.name}: hace ${r.daysSinceValue} días`).join(' · ') +
+        '. Sin eso, la ganancia que ves no es la de hoy.' });
+  }
+  const sinValor = rows.filter((r) => !r.hasValue);
+  if (sinValor.length) {
+    out.push({ tone: 'info', title: `Sin valor registrado: ${sinValor.map((r) => r.name).join(', ')}`,
+      detail: 'Escribe cuánto hay hoy en cada una para que cuenten en el total.' });
+  }
+
+  // --- cuentas que no se pueden medir -----------------------------------------------------
+  const sinBase = rows.filter((r) => r.hasValue && !r.tracked);
+  if (sinBase.length && totals.untrackedValue > 0) {
+    out.push({ tone: 'info',
+      title: `${formatMoney(totals.untrackedValue)} no entran al cálculo de ganancia`,
+      detail: `${sinBase.map((r) => r.name).join(', ')}: no hay aportaciones registradas, así que no se sabe cuánto han crecido. ` +
+        'Registra con cuánto empezaste para medirlas.' });
+  }
+  return out;
+}
+
+export const TYPE_LABELS = { ahorro: 'Ahorro', bolsa: 'Bolsa', cripto: 'Cripto', otro: 'Otro' };
+
 // ---------------------------------------------------------------------------
 // Filtros
 // ---------------------------------------------------------------------------

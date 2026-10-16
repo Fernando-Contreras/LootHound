@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "loothound",
-      "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "http.server", "8765"],
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/devserver.mjs", "8765"],
       "port": 8765
     }
   ]

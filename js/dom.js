@@ -1,16 +1,25 @@
 // Helpers de DOM. Sin framework: crear elementos, escapar texto, avisos.
 
-/** Crea un elemento. `props` acepta class, dataset, on*, y atributos sueltos. */
+/**
+ * Crea un elemento. `props` acepta class, dataset, on*, y atributos sueltos.
+ *
+ * Seguridad: adrede NO existe una opción `html`. Los nombres de comercios y de
+ * quien te transfiere vienen de PDFs y de terceros, así que todo texto entra
+ * por createTextNode: un nombre malicioso no puede inyectar HTML ni scripts.
+ * Y una clave `on…` sólo se acepta con una FUNCIÓN; con un texto se ignora, para
+ * que nunca se cree un manejador en línea (`onclick="..."`).
+ */
 export function el(tag, props = {}, ...children) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
     if (v === null || v === undefined || v === false) continue;
+    if (/^on/i.test(k)) {
+      if (typeof v === 'function') node.addEventListener(k.slice(2).toLowerCase(), v);
+      continue;
+    }
     if (k === 'class') node.className = v;
     else if (k === 'dataset') Object.assign(node.dataset, v);
     else if (k === 'style' && typeof v === 'object') Object.assign(node.style, v);
-    else if (k.startsWith('on') && typeof v === 'function') {
-      node.addEventListener(k.slice(2).toLowerCase(), v);
-    } else if (k === 'html') node.innerHTML = v;
     else node.setAttribute(k, v === true ? '' : v);
   }
   append(node, children);
@@ -74,6 +83,70 @@ export function confirmDialog(title, body, { okLabel = 'Sí, continuar', danger 
     document.body.append(dlg);
     dlg.showModal();
   });
+}
+
+/**
+ * Diálogo con un formulario, validación por campo y guardado.
+ *
+ * @param {object} cfg
+ * @param {string} cfg.title
+ * @param {Array<{name,label,type?,value?,options?:Array<[value,label]>,step?,
+ *                inputmode?,maxlength?,placeholder?,wide?}>} cfg.fields
+ * @param {(values:object)=>{ok:boolean, errors:object, value?:any}} cfg.validate
+ * @param {(value:any)=>Promise<void>} cfg.save  corre sólo si validó
+ * @param {string} [cfg.note]
+ */
+export function formDialog({ title, fields, validate, save, note = null, submitLabel = 'Guardar' }) {
+  const control = (f) => (f.options
+    ? el('select', { name: f.name },
+        f.options.map(([v, l]) => el('option', { value: v, selected: String(v) === String(f.value ?? '') }, l)))
+    : el('input', {
+        name: f.name, type: f.type || 'text', value: f.value ?? '', step: f.step,
+        inputmode: f.inputmode, maxlength: f.maxlength, placeholder: f.placeholder,
+      }));
+
+  const form = el('form', { class: 'editform', novalidate: true },
+    el('h3', {}, title),
+    el('div', { class: 'editform__grid' },
+      fields.map((f) => el('label', { class: `editform__field${f.wide ? ' editform__field--wide' : ''}` },
+        el('span', {}, f.label), control(f),
+        el('small', { class: 'field-error', dataset: { error: f.name }, hidden: true })))),
+    note && el('p', { class: 'note' }, note),
+    el('div', { class: 'modal__actions' },
+      el('button', { class: 'btn btn--ghost', type: 'button', onclick: () => dlg.close() }, 'Cancelar'),
+      el('button', { class: 'btn btn--primary', type: 'submit' }, submitLabel)),
+  );
+  const dlg = el('dialog', { class: 'modal modal--wide' }, form);
+  dlg.addEventListener('close', () => dlg.remove(), { once: true });
+
+  const showErrors = (errors = {}) => {
+    for (const small of form.querySelectorAll('.field-error')) {
+      const msg = errors[small.dataset.error];
+      small.textContent = msg || '';
+      small.hidden = !msg;
+    }
+    const first = Object.keys(errors)[0];
+    if (first) form.elements[first]?.focus();
+  };
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const res = validate(Object.fromEntries(new FormData(form).entries()));
+    showErrors(res.errors);
+    if (!res.ok) return;
+    await withBusy(form.querySelector('button[type=submit]'), async () => {
+      try {
+        await save(res.value);
+        dlg.close();
+      } catch (err) {
+        toast(err?.message || 'No se pudo guardar.', 'error', 8000);
+      }
+    });
+  });
+
+  document.body.append(dlg);
+  dlg.showModal();
+  return dlg;
 }
 
 /** Deshabilita un botón mientras corre una promesa. */

@@ -58,7 +58,10 @@ function identityCard(state, actions) {
     el('p', { class: 'muted' },
       'Cuando te transfieres dinero entre tus propias cuentas, el banco escribe ' +
       'tu nombre como contraparte. Con esto la app reconoce que no es un ingreso ' +
-      'nuevo, sino tu mismo dinero cambiando de lugar.'),
+      'nuevo, sino tu mismo dinero cambiando de lugar. Escribe tu nombre completo ' +
+      '(se exigen todas sus palabras, así un familiar con tus mismos apellidos no ' +
+      'cuenta como tú) y, si tus otras cuentas aparecen con un apodo, agrégalo ' +
+      'también (por ejemplo "JuanFer Nu").'),
 
     names.length
       ? el('div', { class: 'chips' }, names.map((n) => el('span', { class: 'chip' },
@@ -364,6 +367,11 @@ function exportJSON(state) {
     categories: [...state.categoryMap.values()],
     rules: state.rules,
     transactions: state.transactions,
+    // Todo lo demás que guarda la app: un respaldo sin esto dejaría fuera justo
+    // lo que no se puede regenerar desde un PDF.
+    settings: state.settings,
+    budgets: state.budgets ?? [],
+    investments: state.investments && !state.investments.error ? state.investments : null,
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);

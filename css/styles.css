@@ -98,9 +98,14 @@ code { font-family: var(--mono); font-size: .9em; }
 .nav__icon { font-size: .95rem; }
 
 .main { max-width: 1180px; margin: 0 auto; padding: 1.25rem; }
-.view { display: grid; gap: 1.25rem; }
+/* `minmax(0, 1fr)` y `min-width: 0` son OBLIGATORIOS: sin ellos, el contenido más
+   ancho (una tabla con `nowrap`) estira la columna entera de la cuadrícula y toda
+   la página se desliza de lado en el celular, en vez de que sólo scrollee la
+   tabla dentro de su caja. */
+.view { display: grid; gap: 1.25rem; grid-template-columns: minmax(0, 1fr); }
+.view > *, .grid > * { min-width: 0; }
 .grid { display: grid; gap: 1.25rem; }
-.grid--2 { grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); }
+.grid--2 { grid-template-columns: repeat(auto-fit, minmax(min(330px, 100%), 1fr)); }
 
 /* ------------------------------------------------------------------- cards */
 .card {
@@ -300,6 +305,21 @@ tr.is-over td { background: color-mix(in srgb, var(--out) 8%, transparent); }
 .editform textarea { resize: vertical; font: inherit; }
 .field-error { color: var(--out); font-size: .76rem; }
 .txrow__actions { white-space: nowrap; text-align: right; }
+.editform__field--wide { grid-column: 1 / -1; }
+
+/* --------------------------------------------------------------- inversiones */
+.invtable td, .invtable th { white-space: nowrap; }
+.invtable tfoot td { font-weight: 700; border-top: 2px solid var(--line); border-bottom: 0; }
+.invtable__date { display: block; font-size: .7rem; color: var(--muted); font-weight: 400; }
+.invtable__date.is-stale { color: var(--warn); }
+.valgrid { display: grid; gap: .6rem; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin: .6rem 0 .85rem; }
+.chip--btn { cursor: pointer; background: transparent; color: inherit; }
+.chip--btn:hover { border-color: var(--accent); color: var(--accent); }
+.card--full { grid-column: 1 / -1; }
+.linechart { width: 100%; height: auto; max-height: 300px; }
+.linechart text { font-size: 11px; }
+.help { margin-top: .75rem; }
+.help summary { cursor: pointer; color: var(--accent); font-size: .85rem; }
 .iconbtn--edit:hover { color: var(--accent); }
 
 .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .85rem; }

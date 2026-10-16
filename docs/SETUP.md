@@ -208,6 +208,28 @@ probado antes.
 
 ---
 
+## 5.6 Presupuesto e Inversiones (opcionales)
+
+Cada una guarda sus datos en tablas propias, y se activa corriendo su SQL una sola
+vez en **SQL Editor → New query → Run**. Si no lo corres, la app funciona igual y
+esa sección te avisa qué falta.
+
+| Quieres | Corre | Qué crea |
+|---|---|---|
+| Guardar topes de presupuesto que ajustas a mano | [`04_presupuesto.sql`](../supabase/04_presupuesto.sql) | tabla `budgets` |
+| La sección **Inversiones** (valor, ganancia, rendimiento, meta mensual) | [`05_inversiones.sql`](../supabase/05_inversiones.sql) | `investment_accounts`, `investment_flows`, `investment_values` y la columna `settings.monthly_investment_goal` |
+
+Los dos son seguros de volver a correr (no duplican ni borran nada), llevan RLS
+con las mismas reglas que el resto, y `node tools/check-rls.mjs` los incluye en
+la comprobación.
+
+**Inversiones, la primera vez:** al abrir la sección sin datos te pide, por cada
+plataforma, el valor de hoy y cuánto has metido en total (lo que en una hoja de
+Excel serían las columnas "Inversión actual" y "Le metí"). De ahí en adelante
+sólo actualizas valores cuando quieras y registras cada aportación.
+
+---
+
 ## 6. Publicar en GitHub Pages
 
 ```bash

@@ -23,19 +23,28 @@ if (/^sb_secret_/i.test(key)) {
 }
 
 const url = rawUrl.trim().replace(/\/+$/, '');
-const TABLES = [
-  'transactions', 'accounts', 'categories', 'category_rules', 'imports', 'settings',
+// Las del núcleo: si falta alguna, algo está mal.
+const TABLES = ['transactions', 'accounts', 'categories', 'category_rules', 'imports', 'settings'];
+
+// Las opcionales: cada una nace de un SQL que se corre cuando se quiere esa
+// función. Que no existan todavía NO es una falla; que existan y se dejen leer
+// sin sesión SÍ lo es.
+const OPTIONAL = {
   // `heartbeat` no guarda datos tuyos, pero tampoco debe ser legible: el robot
   // sólo puede tocarla a través de la función ping().
-  'heartbeat',
-];
+  heartbeat: '03_keepalive.sql',
+  budgets: '04_presupuesto.sql',
+  investment_accounts: '05_inversiones.sql',
+  investment_flows: '05_inversiones.sql',
+  investment_values: '05_inversiones.sql',
+};
 
 const headers = { apikey: key, Authorization: `Bearer ${key}` };
 let failures = 0;
 
 console.log(`\nProbando ${url} sin sesión iniciada...\n`);
 
-for (const table of TABLES) {
+for (const table of [...TABLES, ...Object.keys(OPTIONAL)]) {
   const endpoint = `${url}/rest/v1/${table}?select=*&limit=5`;
   try {
     const res = await fetch(endpoint, { headers });
@@ -54,8 +63,12 @@ for (const table of TABLES) {
     } else if (res.status === 401 || res.status === 403) {
       console.log(`  OK    ${table.padEnd(16)} acceso denegado (${res.status})`);
     } else if (res.status === 404) {
-      failures++;
-      console.log(`  FALLA ${table.padEnd(16)} no existe — ¿corriste 01_schema.sql?`);
+      if (OPTIONAL[table]) {
+        console.log(`  --    ${table.padEnd(16)} aún no existe (opcional: corre supabase/${OPTIONAL[table]} cuando la quieras)`);
+      } else {
+        failures++;
+        console.log(`  FALLA ${table.padEnd(16)} no existe — ¿corriste 01_schema.sql?`);
+      }
     } else {
       failures++;
       console.log(`  ?     ${table.padEnd(16)} HTTP ${res.status}: ${body.slice(0, 160)}`);

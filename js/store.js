@@ -160,9 +160,12 @@ export async function recategorize(updates) {
   let changed = 0;
   for (const [key, ids] of porCategoria) {
     const category_id = key === '__null__' ? null : key;
-    // `in` acepta listas grandes, pero se parte para no armar URLs enormes
-    for (let i = 0; i < ids.length; i += 200) {
-      const chunk = ids.slice(i, i + 200);
+    // `in` viaja en la URL: cada id (uuid) pesa ~39 caracteres, y muchos
+    // servidores/proxies cortan alrededor de 8 KB. 200 ids rozaban ese límite,
+    // así que con un historial grande la recategorización podía fallar.
+    // Con 80 son ~3 KB, de sobra.
+    for (let i = 0; i < ids.length; i += 80) {
+      const chunk = ids.slice(i, i + 80);
       const data = unwrap(await sb().from('transactions')
         .update({ category_id, categorized_by: category_id ? 'rule' : 'none' })
         .in('id', chunk)
@@ -215,6 +218,78 @@ export async function saveBudget({ category_id, amount, month = null }) {
 
 export async function deleteBudget(id) {
   const { error } = await sb().from('budgets').delete().eq('id', id);
+  if (error) throw error;
+}
+
+// ---------------------------------------------------------------- inversiones
+const TABLA_FALTANTE = /does not exist|schema cache|Could not find the table/i;
+
+/** Trae TODAS las filas de una tabla, paginando con un orden total (con desempate por id). */
+async function fetchAllRows(table, orderBy) {
+  const PAGE = 1000;
+  const all = [];
+  for (let page = 0; ; page++) {
+    let q = sb().from(table).select('*');
+    for (const [col, asc] of orderBy) q = q.order(col, { ascending: asc });
+    const { data, error } = await q.order('id', { ascending: true })
+      .range(page * PAGE, page * PAGE + PAGE - 1);
+    if (error) throw error;
+    all.push(...data);
+    if (data.length < PAGE) break;
+  }
+  return all;
+}
+
+/**
+ * Plataformas, aportaciones y valores. Devuelve null si todavía no se corrió
+ * 05_inversiones.sql: la app sigue funcionando y la sección avisa qué falta.
+ */
+export async function fetchInvestments() {
+  try {
+    const [accounts, flows, values] = await Promise.all([
+      fetchAllRows('investment_accounts', [['sort_order', true], ['name', true]]),
+      fetchAllRows('investment_flows', [['occurred_on', false], ['created_at', false]]),
+      fetchAllRows('investment_values', [['as_of', false]]),
+    ]);
+    return { accounts, flows, values };
+  } catch (err) {
+    if (TABLA_FALTANTE.test(String(err?.message || ''))) return null;
+    throw err;
+  }
+}
+
+export async function createInvestmentAccounts(rows) {
+  return unwrap(await sb().from('investment_accounts').insert(rows).select());
+}
+export async function updateInvestmentAccount(id, patch) {
+  return unwrap(await sb().from('investment_accounts').update(patch).eq('id', id).select().single());
+}
+export async function deleteInvestmentAccount(id) {
+  const { error } = await sb().from('investment_accounts').delete().eq('id', id);
+  if (error) throw error;
+}
+
+export async function createFlows(rows) {
+  return unwrap(await sb().from('investment_flows').insert(rows).select());
+}
+export async function updateFlow(id, patch) {
+  return unwrap(await sb().from('investment_flows').update(patch).eq('id', id).select().single());
+}
+export async function deleteFlow(id) {
+  const { error } = await sb().from('investment_flows').delete().eq('id', id);
+  if (error) throw error;
+}
+
+/** Una foto por plataforma y día: si ya hay una de hoy, se reemplaza. */
+export async function upsertValues(rows) {
+  return unwrap(await sb().from('investment_values')
+    .upsert(rows, { onConflict: 'investment_id,as_of' }).select());
+}
+export async function updateValue(id, patch) {
+  return unwrap(await sb().from('investment_values').update(patch).eq('id', id).select().single());
+}
+export async function deleteValue(id) {
+  const { error } = await sb().from('investment_values').delete().eq('id', id);
   if (error) throw error;
 }
 

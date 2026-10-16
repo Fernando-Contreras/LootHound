@@ -20,18 +20,29 @@ manual sólo lo que de verdad no deja rastro digital (el efectivo).
 
 ## Qué hace
 
-- **Importa PDF de BBVA y Nu** — parser dedicado por banco, con preview antes de
-  guardar. El PDF se procesa con `pdf.js` en el navegador; no se sube a ningún
-  servidor.
+- **Importa PDF de BBVA (crédito y débito), Nu y Mercado Pago** — parser dedicado
+  por banco, con preview antes de guardar. El PDF se procesa con `pdf.js` en el
+  navegador; no se sube a ningún servidor.
 - **Valida contra el propio estado de cuenta** — compara lo que sumó el parser
   contra los totales impresos en el PDF. Si no cuadran, avisa.
-- **Detecta duplicados** — huella exacta con garantía en la base de datos, más
-  aviso de "parecidos" para estados de cuenta que se traslapan.
-- **Categoriza sola** — reglas por palabra clave editables. Al corregir una
-  categoría a mano, ofrece convertir la corrección en regla.
-- **Captura rápida de efectivo** — monto, categoría, listo.
-- **Dashboard** — balance del mes, gasto por categoría, tendencia de 6 meses,
-  dónde más gastaste.
+- **No duplica nada** — subir dos veces el mismo estado de cuenta, o dos que se
+  traslapan, no repite movimientos. Un movimiento ya guardado se reconoce aunque
+  hayas corregido su tipo o cambiado su texto, y no se puede volver a marcar.
+- **Separa gastos, ingresos y traspasos** — un traspaso entre tus cuentas, el pago
+  de tu tarjeta, un retiro de efectivo o un envío a una plataforma de inversión
+  no cuentan como gasto ni como ingreso. Reconoce las cuentas propias por tu
+  nombre y los dudosos los marca "revisar" (y se confirman solos con su pareja).
+- **Categoriza sola** — reglas por palabra clave editables que también se aplican
+  al historial. Al corregir una categoría a mano, ofrece crear la regla.
+- **Edita cualquier movimiento** — fecha, nombre, monto, tipo, categoría, cuenta y
+  nota, sin borrar y volver a crear.
+- **Captura rápida de efectivo** y **conciliación**: cuánto retiraste del cajero
+  contra lo que capturaste, para saber cuánto deberías traer en la cartera.
+- **Dashboard y presupuesto** — balance del mes, gasto por categoría, tendencia, y
+  un presupuesto que se calcula solo con la mediana de tus meses cerrados.
+- **Inversiones** — reemplaza la hoja de Excel: valor actual, cuánto has metido,
+  ganancia, rendimiento anualizado (XIRR), peso por plataforma y por tipo, meta
+  mensual e historial.
 - **Multi-usuario** — cada quien ve sólo sus datos, garantizado con Row Level
   Security en Postgres.
 
@@ -49,15 +60,21 @@ Resumen:
 2. Corre [`supabase/01_schema.sql`](supabase/01_schema.sql) en el SQL Editor.
 3. Corre [`supabase/02_verify_rls.sql`](supabase/02_verify_rls.sql) y confirma
    que todo sale ✓.
-4. Abre la app y pega la **URL del proyecto** y la llave **anon / public**.
+4. Opcionales, cada uno activa una función (la app avisa cuando falta alguno):
+   - [`04_presupuesto.sql`](supabase/04_presupuesto.sql) — guardar topes de presupuesto
+   - [`05_inversiones.sql`](supabase/05_inversiones.sql) — la sección de Inversiones
+   - [`03_keepalive.sql`](supabase/03_keepalive.sql) — sólo si usas el latido (ver abajo)
+5. Abre la app y pega la **URL del proyecto** y la llave **publicable**.
 
 ### Correr en local
 
 ```bash
-python -m http.server 8765
+node tools/devserver.mjs
 ```
 
-Y abre `http://localhost:8765`. Tiene que ser por HTTP: la app usa módulos ES y
+Y abre `http://localhost:8765`. Es un servidor **sin caché** a propósito: con
+`python -m http.server` el navegador cachea los módulos y sigues viendo el código
+viejo después de editar. Tiene que ser por HTTP: la app usa módulos ES y
 `file://` los bloquea.
 
 ---
@@ -112,14 +129,16 @@ js/
   store.js          TODAS las consultas a la base
   finance.js        ← fuente única de verdad de los cálculos
   categorize.js     motor de reglas
-  dedupe.js         huellas y detección de parecidos
+  dedupe.js         huellas, coincidencia 1 a 1 y detección de parecidos
+  txedit.js         validación de crear/editar movimientos
+  invedit.js        validación de inversiones
   charts.js         SVG a mano, sin librerías
-  dom.js            helpers
+  dom.js            helpers (sin innerHTML: todo texto entra como texto)
   parsers/
     lines.js        pdf.js → líneas de texto
-    bbva.js         parser dedicado BBVA
-    nu.js           parser dedicado Nu
-  views/            dashboard, movimientos, importar, reglas
+    identity.js     qué es tuyo y qué es de otra persona
+    bbva.js · bbva-debito.js · nu.js · mercadopago.js   un parser por banco
+  views/            dashboard, presupuesto, inversiones, movimientos, importar, reglas
 supabase/           schema y verificación de RLS
 tests/              pruebas sin navegador (fixtures sintéticos)
 tools/parser-lab.html   depurador de parsers
@@ -148,19 +167,22 @@ Contarlas inflaría ambos lados del balance.
 
 ---
 
-## Que Supabase no se duerma
+## Los límites del plan gratuito de Supabase
 
-Los proyectos gratuitos se pausan tras 7 días sin actividad. El repo trae un
-GitHub Action ([`keepalive.yml`](.github/workflows/keepalive.yml)) que le pega
-cada 2 días llamando a `public.ping()`, una función que hace una escritura
-mínima — no una simple lectura, porque no está documentado si un `401` cuenta
-como actividad.
+Dos cosas que conviene saber antes de depender de esto:
 
-Corre [`supabase/03_keepalive.sql`](supabase/03_keepalive.sql) una vez y se
-encarga solo. Para revisar que siga vivo: `select * from public.heartbeat;`
+- **Se pausa a los 7 días sin uso**, y reanudarlo es manual desde el dashboard
+  (*Resume project*, ~4 minutos; tus datos no se pierden).
+- **Máximo 2 proyectos gratis activos por persona.** Con más, no te deja
+  reanudar uno hasta pausar o borrar otro.
 
-Un detalle a tener presente: GitHub apaga los workflows programados si el repo
-pasa 60 días sin commits. Avisa por correo y se reactivan con un clic.
+Se intentó mantenerlo despierto con un GitHub Action que le pega cada 2 días
+([`keepalive.yml`](.github/workflows/keepalive.yml)). **No funcionó**: llamadas
+por la API (incluida una función que escribe en la base) siguieron sin evitar la
+pausa. Lo único que queda por probar es una conexión directa a Postgres con el
+secreto `SUPABASE_DB_URL` (ver [docs/SETUP.md](docs/SETUP.md), sección 5.5);
+subir a Pro quita la pausa por completo. El horario del workflow está apagado
+por defecto: se dispara a mano desde la pestaña *Actions*.
 
 ## Pruebas
 
@@ -168,9 +190,10 @@ pasa 60 días sin commits. Avisa por correo y se reactivan con un clic.
 node tests/run.mjs
 ```
 
-70 aserciones sobre parsers, cálculos, duplicados y reglas. Sin navegador y sin
-red. Los fixtures son sintéticos — nunca metas un estado de cuenta real, el repo
-es público.
+Cientos de aserciones sobre parsers, cálculos, duplicados, reglas, inversiones y
+validación. Sin navegador y sin red. Los fixtures son sintéticos y los nombres
+de las pruebas inventados — nunca metas un estado de cuenta real ni nombres de
+personas reales: el repo es público.
 
 ---
 
@@ -194,8 +217,8 @@ Con cuatro estados de cuenta de un mismo mes:
 
 | | Sin detección | Con detección |
 |---|---|---|
-| "Ingresos" | ~$114,000 | **$33,416.94** (nómina + rendimientos) |
-| Transferencias | contadas | $139,840.67 ignoradas |
+| "Ingresos" | ~$100,000 | **$30,000.00** (nómina + rendimientos) |
+| Transferencias | contadas | $110,000.00 ignoradas |
 
 Se detecta por el nombre del titular en la descripción (`Reglas` → *Tus nombres
 en los estados de cuenta*), por menciones a otras carteras tuyas, y por

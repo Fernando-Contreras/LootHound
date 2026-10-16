@@ -5,17 +5,17 @@
 //
 //   ...
 //   COMPRAS Y CARGOS DIFERIDOS A MESES SIN INTERESES     ← informativa, NO se importa
-//   29-jun-2026 OMNIBUS DE MEXICO $1,845.00 $615.00 ...
+//   29-jun-2026 OMNIBUS DE MEXICO $900.00 $300.00 ...
 //
 //   CARGOS,COMPRAS Y ABONOS REGULARES(NO A MESES)        ← aquí sí
 //   13-jul-2026 13-jul-2026 CLIP MX*REST ZONG SHEN     + $160.00
 //   16-jul-2026 17-jul-2026 MCDONALD S F36212          + $206.67
 //   USD $11.79 TIPO DE CAMBIO $17.53                     ← renglón hijo del anterior
-//   30-jul-2026 30-jul-2026 BMOVIL.PAGO TDC            - $15,195.89
+//   30-jul-2026 30-jul-2026 BMOVIL.PAGO TDC            - $3,900.00
 //   IVA :$ 0.00 Interes: $ 0.00 ...                      ← detalle de pago, se ignora
 //   ...
-//   TOTAL CARGOS  $38,734.94                             ← se usa para validar
-//   TOTAL ABONOS -$16,252.28
+//   TOTAL CARGOS  $12,345.67                             ← se usa para validar
+//   TOTAL ABONOS -$4,000.00
 //
 // Detalles que importan:
 //  * Dos fechas por renglón: operación y cargo. Usamos la de OPERACIÓN como

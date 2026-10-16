@@ -42,18 +42,18 @@ nada.
 Periodo: 13-jul-2026 al 12-ago-2026
 
 COMPRAS Y CARGOS DIFERIDOS A MESES SIN INTERESES     ← informativa
-29-jun-2026 OMNIBUS DE MEXICO $1,845.00 $615.00 ...
+29-jun-2026 OMNIBUS DE MEXICO $900.00 $300.00 ...
 
 CARGOS,COMPRAS Y ABONOS REGULARES(NO A MESES)        ← la buena
 13-jul-2026 13-jul-2026 CLIP MX*REST ZONG SHEN     + $160.00
 16-jul-2026 17-jul-2026 MCDONALD S F36212          + $206.67
 USD $11.79 TIPO DE CAMBIO $17.53                     ← hijo del anterior
-30-jul-2026 30-jul-2026 BMOVIL.PAGO TDC            - $15,195.89
+30-jul-2026 30-jul-2026 BMOVIL.PAGO TDC            - $3,900.00
 IVA :$ 0.00 Interes: $ 0.00 Comisiones:$0.00 ...     ← se ignora
 22-jul-2026 22-jul-2026 ANTHROPIC* CLAUDE SUB ; Tarjeta Digital ***6202 + $349.69
 
-TOTAL CARGOS  $38,734.94
-TOTAL ABONOS -$16,252.28
+TOTAL CARGOS  $12,345.67
+TOTAL ABONOS -$4,000.00
 ```
 
 ### Regla de extracción
@@ -79,8 +79,8 @@ TOTAL ABONOS -$16,252.28
 
 ```
 72 movimientos
-cargos:  $38,734.94  =  TOTAL CARGOS del PDF   ✓
-abonos:  $16,252.28  =  TOTAL ABONOS del PDF   ✓
+cargos:  $12,345.67  =  TOTAL CARGOS del PDF   ✓
+abonos:  $4,000.00  =  TOTAL ABONOS del PDF   ✓
 62 movimientos con tipo de cambio USD
 ```
 
@@ -91,14 +91,14 @@ abonos:  $16,252.28  =  TOTAL ABONOS del PDF   ✓
 ### Estructura
 
 ```
-Saldo inicial                              $23,835.78
+Saldo inicial                              $10,000.00
 Depósitos                                       +$0.00
-Gastos                                      -$4,248.53
-Dinero generado este mes                      $199.00
-Saldo al generar este estado de cuenta     $19,786.25
+Gastos                                      -$1,500.00
+Dinero generado este mes                      $200.00
+Saldo al generar este estado de cuenta     $8,700.00
 
 Detalle de movimientos en tu cuenta                    ← la buena
-30 JUL 2026 FANDANGO * Compra                 -$897.03
+30 JUL 2026 FANDANGO * Compra                 -$600.00
 USD 1.00 = MXN 17.5133 USD 51.22                       ← hijo del anterior
 30 JUL 2026 Retiro de Cajita: Cajita Turbo  +$1,500.00
 
@@ -125,14 +125,14 @@ Detalle de movimientos de tus cajitas                  ← espejo, se ignora
 ### La comprobación que prueba que las Cajitas son internas
 
 ```
-897.03 + 17.50 + 16.62 + 3,317.38  =  4,248.53  =  "Gastos" del PDF
+600.00 + 17.50 + 16.62 + 865.88  =  1,500.00  =  "Gastos" del PDF
 ```
 
 Ninguna Cajita entra en esa suma. Y el saldo cierra:
 
 ```
-23,835.78 (inicial) + 0 (depósitos) + 199.00 (rendimientos) − 4,248.53 (gastos)
-= 19,786.25  =  saldo final declarado   ✓
+10,000.00 (inicial) + 0 (depósitos) + 200.00 (rendimientos) − 1,500.00 (gastos)
+= 8,700.00  =  saldo final declarado   ✓
 ```
 
 ---
@@ -145,8 +145,8 @@ el resultado en el preview **antes** de importar:
 ```
 ✓ Los totales cuadran con los que declara el PDF
               SEGÚN EL PDF    SEGÚN EL PARSER
-Cargos         $38,734.94        $38,734.94
-Abonos         $16,252.28        $16,252.28
+Cargos         $12,345.67        $12,345.67
+Abonos         $4,000.00        $4,000.00
 ```
 
 Si no cuadran, sale una advertencia en amarillo con la diferencia exacta. Es la
@@ -157,7 +157,7 @@ datos mal en silencio, avisa.
 
 ## Duplicados
 
-Dos capas ([`js/dedupe.js`](../js/dedupe.js)):
+Tres capas ([`js/dedupe.js`](../js/dedupe.js)):
 
 **1. Huella exacta** — `UNIQUE(user_id, fingerprint)` en la base.
 
@@ -173,11 +173,47 @@ PDF se vuelven a calcular `#0` y `#1`, y los dos chocan contra la restricción.
 Sin ese contador habría que elegir entre perder movimientos reales o permitir
 reimportar el mismo estado de cuenta.
 
+**1b. Coincidencia floja, uno a uno** — también cuenta como "ya registrado".
+
+La huella incluye el *tipo* y el *texto*, y los dos pueden cambiar entre una
+importación y otra: corriges el tipo en el preview, o se mejora el parser y limpia
+un pedazo de texto (ya pasó: BBVA débito dejaba pegada la fecha de liquidación).
+Con sólo la huella, el mismo movimiento reimportado entraba duplicado si alguien
+usaba "Marcar todo".
+
+Así que además se busca, entre lo guardado, un movimiento de la **misma cuenta,
+misma fecha y mismo monto** con descripción casi idéntica (Dice ≥ 0.9). Es *uno a
+uno*: cada movimiento guardado cubre a un solo nuevo, así que dos cafés idénticos
+siguen siendo dos. Lo que sale marcado "ya registrado" **no se puede volver a
+seleccionar** (el checkbox está deshabilitado y "Marcar todo" lo salta), y al
+confirmar se vuelve a comprobar contra la base.
+
 **2. Parecido** — aviso suave, no bloquea.
 
 Mismo monto exacto, fecha dentro de ±3 días, y descripción con coeficiente de
 Dice ≥ 0.6 sobre bigramas. Sirve para estados de cuenta que se traslapan cuando
 el banco escribió el comercio distinto entre una versión y otra.
+
+---
+
+## Qué es tuyo y qué es de otra persona
+
+[`js/parsers/identity.js`](../js/parsers/identity.js) decide si un movimiento es
+gasto, ingreso o traspaso. Reglas, en orden:
+
+1. Cajita, retiro de efectivo y pago de tu tarjeta → traspaso, siempre.
+2. **Tu nombre** en la descripción → traspaso. Se exigen *todas* las palabras de
+   tu nombre (el último apellido puede venir cortado): un hermano con tus mismos
+   apellidos NO eres tú. Los apodos ("JuanFer Nu") se registran en *Reglas → Tus
+   nombres*.
+3. Envío a una plataforma de inversión (GBM, eToro, Bitso...) → traspaso.
+4. Mencionar tu otra cartera ("Mercado Pago", "Nu") **sin tu nombre** → traspaso
+   marcado *revisar*, porque el nombre del banco no dice de quién es la cuenta. Si
+   BBVA imprimió el nombre de la contraparte y no es el tuyo, es otra persona y
+   esta regla no aplica. Se confirma solo cuando su pareja (mismo monto, ±3 días)
+   ya está en otra cuenta.
+5. Compensaciones, bonificaciones y reembolsos del banco → ingreso.
+6. Lo demás: entró = ingreso, salió = gasto.
 
 ---
 

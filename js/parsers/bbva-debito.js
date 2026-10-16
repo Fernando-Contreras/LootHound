@@ -5,17 +5,17 @@
 //
 //   FECHA                                                    SALDO
 //   OPER  LIQ   DESCRIPCIÓN   REFERENCIA   CARGOS  ABONOS  OPERACIÓN  LIQUIDACIÓN
-//   01/JUL 01/JUL SPEI RECIBIDOMercado Pago              13,648.36
+//   01/JUL 01/JUL SPEI RECIBIDOMercado Pago              5,000.00
 //          0181791744 722 1513083MERCADO*PAGO
 //          00722969020510490114
 //          MARIO ALBERTO REYES DUARTE      ← contraparte, en renglón aparte
-//   01/JUL 01/JUL PAGO TARJETA DE CREDITO   13,648.36
+//   01/JUL 01/JUL PAGO TARJETA DE CREDITO   5,000.00
 //          1901658880 CUENTA: BMOV
 //   08/JUL 08/JUL RETIRO SIN TARJETA         2,000.00
-//   14/JUL 14/JUL PAGO DE NOMINA                20,968.32  20,968.32  20,968.32
+//   14/JUL 14/JUL PAGO DE NOMINA                15,000.00  15,000.00  15,000.00
 //   ...
-//   TOTAL IMPORTE CARGOS 56,868.96
-//   TOTAL IMPORTE ABONOS 56,868.96
+//   TOTAL IMPORTE CARGOS 40,000.00
+//   TOTAL IMPORTE ABONOS 40,000.00
 //
 // LO IMPORTANTE:
 //
@@ -29,8 +29,8 @@
 //    la contraparte. Es lo que permite saber que un SPEI recibido es dinero que
 //    te mandaste tú (transferencia) y no un ingreso.
 //
-// 3. Sin el punto 2, este estado de cuenta reportaría $56,868.96 de ingresos en
-//    julio, cuando lo que realmente entró como ingreso fueron $33,334.96 de
+// 3. Sin el punto 2, este estado de cuenta reportaría $40,000.00 de ingresos en
+//    julio, cuando lo que realmente entró como ingreso fueron $30,000.00 de
 //    nómina. El resto son movimientos entre cuentas propias.
 // ---------------------------------------------------------------------------
 

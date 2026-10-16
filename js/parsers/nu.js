@@ -3,14 +3,14 @@
 //
 // Estructura real del documento (verificada contra un estado de cuenta):
 //
-//   Saldo inicial                              $23,835.78     ← resumen p.1
+//   Saldo inicial                              $10,000.00     ← resumen p.1
 //   Depósitos                                       +$0.00
-//   Gastos                                      -$4,248.53
-//   Dinero generado este mes                      $199.00
-//   Saldo al generar este estado de cuenta     $19,786.25
+//   Gastos                                      -$1,500.00
+//   Dinero generado este mes                      $200.00
+//   Saldo al generar este estado de cuenta     $8,700.00
 //   ...
 //   Detalle de movimientos en tu cuenta                        ← aquí sí
-//   30 JUL 2026 FANDANGO * Compra                 -$897.03
+//   30 JUL 2026 FANDANGO * Compra                 -$600.00
 //   USD 1.00 = MXN 17.5133 USD 51.22                           ← renglón hijo
 //   30 JUL 2026 Retiro de Cajita: Cajita Turbo  +$1,500.00
 //   ...

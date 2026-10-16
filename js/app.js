@@ -10,6 +10,7 @@ import * as fin from './finance.js';
 import { renderSetup, renderAuth } from './views/auth.js';
 import { renderDashboard } from './views/dashboard.js';
 import { renderBudget } from './views/budget.js';
+import { renderInvestments } from './views/investments.js';
 import { renderTransactions } from './views/transactions.js';
 import { renderImport } from './views/import.js';
 import { renderRules } from './views/rules.js';
@@ -37,6 +38,8 @@ const state = {
   imports: [],
   settings: null,
   budgets: [],
+  // null = aún no se corre 05_inversiones.sql; {error} = falló la carga.
+  investments: null,
   accountMap: new Map(),
   categoryMap: new Map(),
   categoryByName: new Map(),
@@ -49,6 +52,7 @@ const state = {
 const ROUTES = {
   dashboard: { label: 'Resumen', icon: '◎', render: renderDashboard },
   presupuesto: { label: 'Presupuesto', icon: '◈', render: renderBudget },
+  inversiones: { label: 'Inversiones', icon: '◆', render: renderInvestments },
   movimientos: { label: 'Movimientos', icon: '☰', render: renderTransactions },
   importar: { label: 'Importar PDF', icon: '↥', render: renderImport },
   reglas: { label: 'Reglas', icon: '⚙', render: renderRules },
@@ -74,7 +78,7 @@ async function loadData() {
   state.loading = true;
   try {
     await store.ensureSeeded();
-    const [accounts, categories, rules, transactions, imports, settings, budgets] =
+    const [accounts, categories, rules, transactions, imports, settings, budgets, investments] =
       await Promise.all([
         store.fetchAccounts(),
         store.fetchCategories(),
@@ -83,9 +87,15 @@ async function loadData() {
         store.fetchImports(),
         store.fetchSettings(),
         store.fetchBudgets(),
+        // Un fallo en Inversiones no debe tumbar el resto de la app.
+        store.fetchInvestments().catch((err) => {
+          console.error(err);
+          return { error: store.dbErrorMessage(err) };
+        }),
       ]);
     state.settings = settings;
     state.budgets = budgets ?? [];
+    state.investments = investments;
     state.accountMap = new Map(accounts.map((a) => [a.id, a]));
     state.categoryMap = new Map(categories.map((c) => [c.id, c]));
     state.categoryByName = new Map(categories.map((c) => [c.name, c]));

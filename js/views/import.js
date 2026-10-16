@@ -21,6 +21,27 @@ import * as store from '../store.js';
 
 let pending = null; // { bank, transactions, period, statement, check, file }
 
+/**
+ * pdf.js reporta los problemas con nombres técnicos ("PasswordException").
+ * Traducirlos a lo que el usuario puede hacer al respecto.
+ */
+export function explicarErrorDePdf(err) {
+  const name = String(err?.name || '');
+  const msg = String(err?.message || err || '');
+  if (name === 'PasswordException' || /password/i.test(msg)) {
+    return 'Este PDF está protegido con contraseña. Ábrelo, guárdalo/expórtalo sin contraseña ' +
+      '(o descárgalo otra vez desde la app del banco) y vuelve a subirlo.';
+  }
+  if (name === 'InvalidPDFException' || /invalid pdf|not a pdf|pdf header/i.test(msg)) {
+    return 'Ese archivo no parece un PDF válido. Descarga otra vez el estado de cuenta ' +
+      'desde la app del banco y súbelo sin renombrarlo ni editarlo.';
+  }
+  if (name === 'MissingPDFException' || /missing pdf/i.test(msg)) {
+    return 'No se pudo abrir el archivo. Intenta de nuevo.';
+  }
+  return msg || 'Error desconocido al leer el PDF.';
+}
+
 /** La columna `description` de la base acepta 200 caracteres. */
 const MAX_DESC = 200;
 
@@ -190,7 +211,7 @@ async function handleFile(file, state, actions) {
     console.error(err);
     mount(host, el('div', { class: 'card card--error' },
       el('h3', {}, 'No se pudo leer el PDF'),
-      el('p', {}, String(err.message || err)),
+      el('p', {}, explicarErrorDePdf(err)),
     ));
   }
 }

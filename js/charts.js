@@ -114,6 +114,68 @@ export function monthlyBars(months, { height = 160 } = {}) {
   );
 }
 
+/**
+ * Líneas en el tiempo (valor vs. aportado). SVG a mano, sin librerías.
+ * El eje X es proporcional a la FECHA (no al número de puntos), así que dos
+ * fotos con meses de distancia no se dibujan pegadas.
+ *
+ * @param {Array<{label:string,color:string,dashed?:boolean,points:Array<{date:string,y:number}>}>} series
+ */
+export function lineChart(series, { width = 640, height = 220, formatY = formatMoney } = {}) {
+  const padL = 64; const padR = 14; const padT = 14; const padB = 26;
+  const all = series.flatMap((s) => s.points);
+  const svg = svgEl('svg', {
+    viewBox: `0 0 ${width} ${height}`, class: 'linechart', role: 'img',
+    'aria-label': series.map((s) => s.label).join(' vs '),
+  });
+  if (all.length < 2) {
+    const t = svgEl('text', { x: width / 2, y: height / 2, 'text-anchor': 'middle', class: 'donut__label' });
+    t.textContent = 'Hacen falta al menos dos fechas con valor para dibujar la línea.';
+    svg.append(t);
+    return svg;
+  }
+
+  const t = (d) => Date.parse(`${d}T00:00:00Z`);
+  const t0 = Math.min(...all.map((p) => t(p.date)));
+  const t1 = Math.max(...all.map((p) => t(p.date)));
+  const yMin = Math.min(0, ...all.map((p) => p.y));
+  const yMax = Math.max(...all.map((p) => p.y)) || 1;
+  const x = (d) => padL + ((t(d) - t0) / Math.max(1, t1 - t0)) * (width - padL - padR);
+  const y = (v) => padT + (1 - (v - yMin) / Math.max(1e-9, yMax - yMin)) * (height - padT - padB);
+
+  // rejilla: 3 líneas horizontales con su valor
+  for (let i = 0; i <= 3; i++) {
+    const v = yMin + ((yMax - yMin) * i) / 3;
+    svg.append(svgEl('line', { x1: padL, x2: width - padR, y1: y(v), y2: y(v), stroke: 'var(--line)', 'stroke-width': 1 }));
+    const lab = svgEl('text', { x: padL - 6, y: y(v) + 4, 'text-anchor': 'end', class: 'donut__label' });
+    lab.textContent = formatY(v).replace(/\.00$/, '');
+    svg.append(lab);
+  }
+  // fechas de los extremos
+  for (const [d, anchor] of [[all.map((p) => p.date).sort()[0], 'start'], [all.map((p) => p.date).sort().pop(), 'end']]) {
+    const lab = svgEl('text', { x: x(d), y: height - 6, 'text-anchor': anchor, class: 'donut__label' });
+    lab.textContent = d;
+    svg.append(lab);
+  }
+
+  for (const s of series) {
+    const pts = [...s.points].sort((a, b) => a.date.localeCompare(b.date));
+    svg.append(svgEl('polyline', {
+      points: pts.map((p) => `${x(p.date)},${y(p.y)}`).join(' '),
+      fill: 'none', stroke: s.color, 'stroke-width': 2.2, 'stroke-linejoin': 'round',
+      ...(s.dashed ? { 'stroke-dasharray': '5 4' } : {}),
+    }));
+    for (const p of pts) {
+      const dot = svgEl('circle', { cx: x(p.date), cy: y(p.y), r: 3, fill: s.color });
+      const title = svgEl('title');
+      title.textContent = `${s.label} · ${p.date}: ${formatY(p.y)}`;
+      dot.append(title);
+      svg.append(dot);
+    }
+  }
+  return svg;
+}
+
 /** Barra horizontal simple, para "top comercios". */
 export function rankBars(items, { max = null, color = 'var(--accent)' } = {}) {
   const top = max ?? Math.max(...items.map((i) => i.amount), 1);

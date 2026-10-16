@@ -18,6 +18,7 @@ import * as imp from '../js/views/import.js';
 import * as sup from '../js/supabase.js';
 import * as keepalive from '../tools/keepalive.mjs';
 import * as edit from '../js/txedit.js';
+import * as inv from '../js/invedit.js';
 
 import * as fxBbva from './fixtures/bbva-sintetico.js';
 import * as fxNu from './fixtures/nu-sintetico.js';
@@ -498,6 +499,12 @@ group('lo que se manda a la base cumple las restricciones', () => {
   eq('rellena lo vacío', imp.clampDescription('   '), 'Movimiento');
   eq('deja intacto lo normal', imp.clampDescription('  OXXO   COXUMEL  '), 'OXXO COXUMEL');
   eq('tolera null', imp.clampDescription(null), 'Movimiento');
+
+  // Errores de pdf.js traducidos a algo que se puede accionar
+  eq('PDF con contraseña', /contraseña/.test(imp.explicarErrorDePdf({ name: 'PasswordException', message: 'No password given' })), true);
+  eq('archivo que no es PDF', /no parece un PDF/.test(imp.explicarErrorDePdf({ name: 'InvalidPDFException', message: 'Invalid PDF structure.' })), true);
+  eq('error desconocido se muestra tal cual', imp.explicarErrorDePdf(new Error('algo raro')), 'algo raro');
+  eq('error sin mensaje no deja un texto vacío', imp.explicarErrorDePdf({}).length > 0, true);
 });
 
 // ------------------------------------------------ presupuesto
@@ -574,7 +581,7 @@ group('presupuesto calculado desde el historial', () => {
   const insightsTempranos = fin.budgetInsights({
     monthTxs: [g(fin.currentMonth(), 1, 2400, 'comida')],
     prevTxs: [], categories: CATS,
-    income: { median: 33334, monthsUsed: 3 },
+    income: { median: 30000, monthsUsed: 3 },
     pace: { ...fin.spendingPace([], fin.currentMonth()), spent: 2400, daysElapsed: 2,
       isCurrentMonth: true, reliable: false, projected: 36000, perDay: 1200, daysLeft: 28 },
     budget: { lines: [], totalBudget: 8160, totalSpent: 2400 },
@@ -915,6 +922,250 @@ group('editar un movimiento: validación y cambios', () => {
 
   // El mismo gasto capturado dos veces debe poder existir (dos cafés iguales).
   eq('dos huellas manuales nunca chocan', edit.newManualFingerprint() !== edit.newManualFingerprint(), true);
+});
+
+// ------------------------------------------------ inversiones
+group('inversiones: el modelo de la hoja de Excel', () => {
+  // Portafolio INVENTADO con la misma forma que una hoja típica (el repo es
+  // público: nada de cifras reales). Cuentas de ahorro con valor pero sin
+  // "le metí", y tres plataformas de riesgo con las dos cosas:
+  //   Nu 20,000 · MercadoPago 50,000 · Didi 10,000 · Revolut 0     (ahorro)
+  //   eToro  valor 11,500  le metí 10,000   (+15%)
+  //   GBM    valor 10,000  le metí  8,000   (+25%)
+  //   Bitso  valor  7,000  le metí 12,000   (−41.67%)
+  //   Total 108,500
+  const acc = (id, name, type) => ({ id, name, type, archived: false, sort_order: 1 });
+  const cuentas = [
+    acc('nu', 'Nu', 'ahorro'), acc('mp', 'Mercado Pago', 'ahorro'), acc('didi', 'Didi', 'ahorro'),
+    acc('rev', 'Revolut', 'ahorro'), acc('etoro', 'eToro', 'bolsa'), acc('gbm', 'GBM', 'bolsa'),
+    acc('bitso', 'Bitso', 'cripto'),
+  ];
+  const dep = (investment_id, occurred_on, amount) => ({ investment_id, occurred_on, amount, kind: 'deposit' });
+  const flujos = [
+    dep('etoro', '2026-01-10', 5000), dep('etoro', '2026-05-10', 5000),
+    dep('gbm', '2026-02-01', 5000), dep('gbm', '2026-06-01', 3000),
+    dep('bitso', '2026-01-20', 7000), dep('bitso', '2026-04-01', 5000),
+  ];
+  const val = (investment_id, as_of, value) => ({ investment_id, as_of, value });
+  const valores = [
+    val('nu', '2026-10-10', 20000), val('mp', '2026-10-10', 50000), val('didi', '2026-10-10', 10000),
+    val('rev', '2026-10-10', 0), val('etoro', '2026-10-10', 11500), val('gbm', '2026-10-10', 10000),
+    val('bitso', '2026-10-10', 7000),
+  ];
+  const S = fin.investmentSummary({ accounts: cuentas, flows: flujos, values: valores,
+    month: '2026-10', asOf: '2026-10-16', goal: 6000 });
+  const fila = (id) => S.rows.find((r) => r.id === id);
+
+  eq('valor total', S.totals.value, 108500);
+  eq('lo que has metido (sólo plataformas con aportaciones)', S.totals.contributed, 30000);
+  eq('"le metí" de eToro', fila('etoro').contributed, 10000);
+  eq('ganancia de eToro', fila('etoro').gain, 1500);
+  eq('% de eToro', fila('etoro').returnPct, 15);
+  eq('ganancia de GBM', fila('gbm').gain, 2000);
+  eq('% de GBM', fila('gbm').returnPct, 25);
+  eq('Bitso va en pérdida', fila('bitso').gain, -5000);
+  eq('% de Bitso', fila('bitso').returnPct, -41.67);
+
+  // La ganancia total sólo cuenta lo que se puede medir.
+  eq('valor medible', S.totals.trackedValue, 28500);
+  eq('aportado medible', S.totals.trackedContributed, 30000);
+  eq('ganancia total', S.totals.gain, -1500);
+  eq('% total', S.totals.returnPct, -5);
+  eq('lo que no se puede medir', S.totals.untrackedValue, 80000);
+  eq('Nu no tiene ganancia inventada', fila('nu').gain, null);
+  eq('Nu no tiene % inventado', fila('nu').returnPct, null);
+
+  // Peso de cada plataforma y por tipo
+  eq('Mercado Pago pesa 46%', Math.round(fila('mp').share * 100), 46);
+  const ahorro = S.typeBreakdown.find((t) => t.type === 'ahorro');
+  eq('ahorro suma 80,000', ahorro.value, 80000);
+  eq('cripto pesa 6%', Math.round(S.typeBreakdown.find((t) => t.type === 'cripto').share * 100), 6);
+
+  // Rendimiento anualizado: hay > 90 días de historia en las tres con aportaciones.
+  eq('eToro tiene anualizado', fila('etoro').annualized !== null, true);
+  eq('Bitso anualizado es negativo', fila('bitso').annualized < 0, true);
+  eq('Nu no tiene anualizado', fila('nu').annualized, null);
+  eq('el total tiene anualizado', S.totals.annualized !== null, true);
+});
+
+group('inversiones: este mes, la meta y el historial', () => {
+  const cuentas = [{ id: 'a', name: 'A', type: 'bolsa', archived: false }, { id: 'b', name: 'B', type: 'ahorro', archived: false }];
+  const f = (investment_id, occurred_on, amount, kind = 'deposit') => ({ investment_id, occurred_on, amount, kind });
+  const flujos = [
+    f('a', '2026-09-30', 9999), f('a', '2026-10-02', 3000), f('b', '2026-10-09', 1000),
+    f('a', '2026-10-12', 500, 'withdrawal'), f('a', '2026-11-01', 7777),
+  ];
+  const vals = [{ investment_id: 'a', as_of: '2026-10-10', value: 100 }];
+  const S = fin.investmentSummary({ accounts: cuentas, flows: flujos, values: vals,
+    month: '2026-10', asOf: '2026-10-16', goal: 6000 });
+
+  eq('lo metido este mes (neto)', S.totals.monthNet, 3500);
+  eq('por plataforma: A', S.rows.find((r) => r.id === 'a').monthNet, 2500);
+  eq('no cuenta septiembre', S.totals.monthNet < 9999, true);
+  eq('no cuenta el futuro (noviembre)', S.rows.find((r) => r.id === 'a').deposited, 12999);
+  eq('avance contra la meta', S.goalProgress.pct, 58);
+  eq('lo que falta', S.goalProgress.remaining, 2500);
+  eq('meta no cumplida', S.goalProgress.reached, false);
+  eq('sin meta no hay avance',
+    fin.investmentSummary({ accounts: cuentas, flows: flujos, values: vals, month: '2026-10', goal: null }).goalProgress, null);
+  eq('meta 0 se trata como sin meta',
+    fin.investmentSummary({ accounts: cuentas, flows: flujos, values: vals, month: '2026-10', goal: 0 }).goalProgress, null);
+
+  // aportaciones por mes
+  const meses = fin.monthlyContributions(flujos, '2026-10', 3);
+  eq('siempre 3 meses, aunque estén vacíos', meses.map((m) => m.month), ['2026-08', '2026-09', '2026-10']);
+  eq('mes vacío es 0', meses[0].net, 0);
+  eq('septiembre', meses[1].net, 9999);
+  eq('octubre (retiro resta)', meses[2].net, 3500);
+  eq('cruza el año', fin.monthlyContributions([], '2026-01', 3).map((m) => m.month), ['2025-11', '2025-12', '2026-01']);
+
+  // plataforma archivada: no cuenta
+  const arch = fin.investmentSummary({ accounts: [{ ...cuentas[0], archived: true }, cuentas[1]],
+    flows: flujos, values: vals, month: '2026-10', asOf: '2026-10-16' });
+  eq('archivada no aparece', arch.rows.map((r) => r.id), ['b']);
+
+  // historial: el valor de cada fecha usa el último conocido de cada plataforma
+  const h = fin.valueHistory(cuentas, flujos, [
+    { investment_id: 'a', as_of: '2026-10-01', value: 100 },
+    { investment_id: 'b', as_of: '2026-10-05', value: 50 },
+    { investment_id: 'a', as_of: '2026-10-10', value: 120 },
+  ]);
+  eq('una fila por fecha con foto', h.map((x) => x.date), ['2026-10-01', '2026-10-05', '2026-10-10']);
+  eq('el 5 suma A (viejo) + B', h[1].value, 150);
+  eq('el 10 usa el A nuevo', h[2].value, 170);
+  eq('lo metido crece con el tiempo', h[0].contributed <= h[2].contributed, true);
+
+  // sin valor registrado
+  eq('sin foto de valor, no hay valor', S.rows.find((r) => r.id === 'b').value, null);
+  eq('y no hay ganancia', S.rows.find((r) => r.id === 'b').gain, null);
+});
+
+group('inversiones: rendimiento anualizado (XIRR)', () => {
+  const near = (got, want, tol = 1e-6) => Math.abs(got - want) < tol;
+  eq('10% en un año', near(fin.xirr([{ date: '2025-01-01', amount: -1000 }, { date: '2026-01-01', amount: 1100 }]), 0.1), true);
+  eq('10% anual compuesto en dos años', near(fin.xirr([{ date: '2025-01-01', amount: -1000 }, { date: '2027-01-01', amount: 1210 }]), 0.1), true);
+  eq('pérdida de 50%', near(fin.xirr([{ date: '2025-01-01', amount: -1000 }, { date: '2026-01-01', amount: 500 }]), -0.5), true);
+  eq('0% si recuperas lo mismo', near(fin.xirr([{ date: '2025-01-01', amount: -1000 }, { date: '2026-01-01', amount: 1000 }]), 0), true);
+  // $1,000 todo el año + $1,000 sólo medio año, y al final $2,200: la ganancia
+  // SIMPLE es 10%, pero la mitad del dinero sólo trabajó medio año, así que
+  // anualizado es más: 13.4627% (verificado con una bisección independiente).
+  eq('con dos aportaciones pesa CUÁNDO metiste',
+    near(fin.xirr([{ date: '2025-01-01', amount: -1000 }, { date: '2025-07-02', amount: -1000 }, { date: '2026-01-01', amount: 2200 }]), 0.134627, 1e-5), true);
+  eq('con un retiro a medias', fin.xirr([{ date: '2025-01-01', amount: -1000 }, { date: '2025-07-01', amount: 300 }, { date: '2026-01-01', amount: 800 }]) > 0, true);
+  eq('un solo flujo no se puede', fin.xirr([{ date: '2025-01-01', amount: -1000 }]), null);
+  eq('todo negativo no se puede', fin.xirr([{ date: '2025-01-01', amount: -1000 }, { date: '2026-01-01', amount: -5 }]), null);
+  eq('sin flujos', fin.xirr([]), null);
+  eq('perderlo todo (valor 0) no se puede anualizar',
+    fin.xirr([{ date: '2025-01-01', amount: -1000 }, { date: '2026-01-01', amount: 0 }]), null);
+
+  // Con poca historia, anualizar es ruido: no se muestra.
+  const S = fin.investmentSummary({
+    accounts: [{ id: 'a', name: 'A', type: 'bolsa', archived: false }],
+    flows: [{ investment_id: 'a', occurred_on: '2026-09-20', amount: 1000, kind: 'deposit' }],
+    values: [{ investment_id: 'a', as_of: '2026-10-10', value: 1020 }], month: '2026-10', asOf: '2026-10-16' });
+  eq('+2% en 3 semanas NO se anualiza (sería ~40%)', S.rows[0].annualized, null);
+  eq('pero el % simple sí', S.rows[0].returnPct, 2);
+  eq('días desde la última foto', S.rows[0].daysSinceValue, 6);
+  eq('una foto de hace 6 días no está vieja', S.rows[0].stale, false);
+  eq('una de hace 45 días sí',
+    fin.investmentSummary({ accounts: [{ id: 'a', name: 'A', type: 'bolsa', archived: false }], flows: [],
+      values: [{ investment_id: 'a', as_of: '2026-09-01', value: 5 }], month: '2026-10', asOf: '2026-10-16' }).rows[0].stale, true);
+});
+
+group('inversiones: observaciones', () => {
+  const acc = (id, name, type) => ({ id, name, type, archived: false });
+  const cuentas = [acc('mp', 'Mercado Pago', 'ahorro'), acc('bitso', 'Bitso', 'cripto'), acc('etoro', 'eToro', 'bolsa')];
+  const S = fin.investmentSummary({
+    accounts: cuentas,
+    flows: [
+      { investment_id: 'bitso', occurred_on: '2026-01-20', amount: 12000, kind: 'deposit' },
+      { investment_id: 'etoro', occurred_on: '2026-01-20', amount: 20000, kind: 'deposit' },
+    ],
+    values: [
+      { investment_id: 'mp', as_of: '2026-10-10', value: 40000 },
+      { investment_id: 'bitso', as_of: '2026-10-10', value: 7000 },
+      { investment_id: 'etoro', as_of: '2026-08-01', value: 11500 },
+    ],
+    month: '2026-10', asOf: '2026-10-16', goal: 6000 });
+  const obs = fin.investmentInsights(S, { monthIncome: 30000, isCurrentMonth: true, daysLeft: 15 });
+  const hay = (re) => obs.some((o) => re.test(o.title) || re.test(o.detail || ''));
+
+  eq('avisa de la plataforma que va en pérdida', hay(/Bitso va -41/), true);
+  eq('avisa que eToro está desactualizado', hay(/Actualiza el valor de: eToro/), true);
+  eq('la meta del mes aparece', hay(/Llevas \$0\.00 de \$6,000\.00/), true);
+  eq('dice que hay dinero fuera del cálculo de ganancia', hay(/no entran al cálculo de ganancia/), true);
+  eq('no da consejos de compra o venta', obs.some((o) => /compra|vende|vender|comprar/i.test(o.title)), false);
+
+  // Concentración
+  const c = fin.investmentSummary({ accounts: cuentas, flows: [],
+    values: [{ investment_id: 'mp', as_of: '2026-10-10', value: 900 }, { investment_id: 'etoro', as_of: '2026-10-10', value: 100 }],
+    month: '2026-10', asOf: '2026-10-16' });
+  eq('avisa de concentración >= 50%',
+    fin.investmentInsights(c).some((o) => /concentra el 90%/.test(o.title)), true);
+
+  // Tasa de inversión del mes
+  const m = fin.investmentSummary({ accounts: cuentas,
+    flows: [{ investment_id: 'etoro', occurred_on: '2026-10-03', amount: 3000, kind: 'deposit' }],
+    values: [], month: '2026-10', asOf: '2026-10-16' });
+  eq('qué parte de lo que ganaste invertiste',
+    fin.investmentInsights(m, { monthIncome: 30000 }).some((o) => /Invertiste el 10%/.test(o.title)), true);
+  eq('sin cuentas no hay observaciones', fin.investmentInsights({ rows: [], totals: {}, typeBreakdown: [], goalProgress: null }), []);
+});
+
+group('inversiones: validación de lo que se captura', () => {
+  const ids = new Set(['a', 'b']);
+  const hoy = '2026-10-16';
+  const flow = (o = {}) => inv.validateFlow({ investment_id: 'a', occurred_on: '2026-10-10', amount: '1500', kind: 'deposit', ...o }, { accountIds: ids, today: hoy });
+  const valor = (o = {}) => inv.validateValue({ investment_id: 'a', as_of: '2026-10-10', value: '11500', ...o }, { accountIds: ids, today: hoy });
+
+  eq('aportación válida', flow().ok, true);
+  eq('monto cero se rechaza', flow({ amount: '0' }).ok, false);
+  eq('monto negativo se rechaza', flow({ amount: '-5' }).ok, false);
+  eq('monto con coma de miles', flow({ amount: '1,500.50' }).value.amount, 1500.5);
+  eq('fecha futura se rechaza', flow({ occurred_on: '2026-10-17' }).ok, false);
+  eq('hoy sí', flow({ occurred_on: '2026-10-16' }).ok, true);
+  eq('fecha imposible', flow({ occurred_on: '2026-02-30' }).ok, false);
+  eq('plataforma que no existe', flow({ investment_id: 'zzz' }).ok, false);
+  eq('tipo inventado', flow({ kind: 'regalo' }).ok, false);
+  eq('retiro es válido', flow({ kind: 'withdrawal' }).ok, true);
+  eq('nota larga se rechaza', flow({ note: 'x'.repeat(201) }).ok, false);
+
+  eq('valor válido', valor().ok, true);
+  eq('valor CERO es válido (Revolut)', valor({ value: '0' }).value.value, 0);
+  eq('valor vacío se rechaza (cero ≠ vacío)', valor({ value: '' }).ok, false);
+  eq('valor negativo se rechaza', valor({ value: '-1' }).ok, false);
+  eq('valor con texto', valor({ value: 'mucho' }).ok, false);
+
+  eq('meta vacía = sin meta', inv.validateGoal('').value, null);
+  eq('meta 6000', inv.validateGoal('6000').value, 6000);
+  eq('meta negativa', inv.validateGoal('-1').ok, false);
+  eq('meta con letras', inv.validateGoal('abc').ok, false);
+
+  eq('plataforma válida', inv.validateAccount({ name: ' eToro ', type: 'bolsa' }).value.name, 'eToro');
+  eq('nombre repetido (sin importar mayúsculas)', inv.validateAccount({ name: 'ETORO', type: 'bolsa' }, { others: ['eToro'] }).ok, false);
+  eq('nombre vacío', inv.validateAccount({ name: ' ', type: 'bolsa' }).ok, false);
+  eq('tipo inválido', inv.validateAccount({ name: 'X', type: 'casino' }).ok, false);
+
+  // Carga inicial: lo que se escribe a partir del Excel
+  const plan = inv.planOnboarding([
+    { name: 'Nu', type: 'ahorro', value: '25000', contributed: '' },
+    { name: 'eToro', type: 'bolsa', value: '11500', contributed: '10000' },
+    { name: 'Didi', type: 'ahorro', value: '', contributed: '' },        // vacía: se omite
+    { name: 'Revolut', type: 'ahorro', value: '0', contributed: '' },    // cero explícito: cuenta
+  ], { since: '2026-01-01', today: hoy });
+  eq('la carga inicial es válida', plan.ok, true);
+  eq('omite las vacías', plan.accounts.map((a) => a.name), ['Nu', 'eToro', 'Revolut']);
+  eq('sólo eToro tiene aportación', plan.flows.map((f) => f.name), ['eToro']);
+  eq('con la fecha de inicio', plan.flows[0].occurred_on, '2026-01-01');
+  eq('3 valores, incluido el cero', plan.values.length, 3);
+  eq('nombres repetidos se rechazan',
+    inv.planOnboarding([{ name: 'A', type: 'otro', value: '1' }, { name: 'a', type: 'otro', value: '1' }], { since: '2026-01-01', today: hoy }).ok, false);
+  eq('valor inválido se rechaza',
+    inv.planOnboarding([{ name: 'A', type: 'otro', value: 'x' }], { since: '2026-01-01', today: hoy }).ok, false);
+  eq('sin nada escrito, avisa',
+    inv.planOnboarding([{ name: 'A', type: 'otro', value: '', contributed: '' }], { since: '2026-01-01', today: hoy }).ok, false);
+  eq('fecha de inicio futura se rechaza',
+    inv.planOnboarding([{ name: 'A', type: 'otro', value: '1' }], { since: '2027-01-01', today: hoy }).ok, false);
 });
 
 // ------------------------------------------------ latido de Supabase
