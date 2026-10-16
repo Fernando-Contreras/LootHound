@@ -13,7 +13,7 @@
 //
 //               Transferencia enviada Juan          ← la descripción se parte
 //   11-08-2026                          173330789324 $ -1,500.00 $ 17,777.18
-//               Fernando Salinas Contreras          ← en varios renglones
+//               Alberto Reyes Duarte          ← en varios renglones
 //
 // LO IMPORTANTE:
 //
@@ -26,7 +26,7 @@
 //    siguiente. Lo que queda huérfano al pie se arrastra al primer movimiento
 //    de la página que sigue.
 //
-// 3. "Transferencia recibida JUAN FERNANDO SALINAS CONTRERAS" es dinero que te
+// 3. "Transferencia recibida MARIO ALBERTO REYES DUARTE" es dinero que te
 //    mandaste tú desde otro banco, NO un ingreso. Lo mismo al revés. Sólo
 //    "Ganancia" (rendimientos y cashback) es ingreso de verdad aquí.
 // ---------------------------------------------------------------------------
@@ -172,11 +172,12 @@ export function parse(lines, options = {}) {
       continue;
     }
     const direction = row.value < 0 ? 'out' : 'in';
-    const { kind, reason, internal } = classifyMovement({
+    const { kind, reason, internal, review } = classifyMovement({
       description, direction, holderNames,
     });
 
     transactions.push({
+      ...(review ? { needs_review: true } : {}),
       bank: BANK_ID,
       occurred_on: row.occurred_on,
       posted_on: null,

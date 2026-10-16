@@ -14,6 +14,18 @@
 //     se vuelven a calcular #0 y #1 y ambos chocan. Sin ese índice tendríamos
 //     que elegir entre perder movimientos reales o permitir reimportar.
 //
+//  1b) COINCIDENCIA FLOJA 1 a 1 — también cuenta como "ya registrado".
+//     La huella exacta incluye el TIPO (gasto/transferencia) y el texto de la
+//     descripción, y ambos pueden cambiar entre una importación y otra:
+//       - corriges el tipo en el preview ("esto sí fue gasto"), o
+//       - se mejora el parser y limpia un pedazo de texto.
+//     Sin esta capa, el mismo movimiento reimportado tendría otra huella y
+//     entraría duplicado si alguien usa "Marcar todo". Así que además se busca,
+//     entre lo ya guardado, un movimiento de la MISMA cuenta, MISMA fecha y
+//     MISMO monto con descripción casi idéntica. Es 1 a 1: cada movimiento
+//     guardado sólo puede "cubrir" a uno nuevo, así que dos cafés idénticos
+//     siguen siendo dos.
+//
 //  2) PARECIDO (fuzzy) — aviso suave en el preview.
 //     Mismo monto, fecha cercana y descripción parecida. Sirve cuando dos
 //     estados de cuenta se traslapan y el banco escribió el comercio distinto
@@ -22,10 +34,28 @@
 
 import { normalizeDescription } from './parsers/common.js';
 
+/**
+ * BBVA débito dejaba pegada al inicio de la descripción la fecha de
+ * liquidación ("14/SEP SPEI ENVIADO..."). Ya no se guarda así, pero los
+ * movimientos importados antes sí la traen: para compararlos se quita siempre.
+ */
+const LEADING_DATE = /^\s*\d{1,2}\/[A-Za-zÁÉÍÓÚáéíóú]{3}\b\s*/;
+
+/** Descripción lista para COMPARAR (no para mostrar). */
+export function cleanDesc(description) {
+  return String(description ?? '').replace(LEADING_DATE, '');
+}
+
 /** Descripción recortada y normalizada, para que la huella sea estable. */
 function fingerprintDesc(description) {
-  return normalizeDescription(description).slice(0, 60);
+  return normalizeDescription(cleanDesc(description)).slice(0, 60);
 }
+
+/** Umbral para dar por "la misma" una descripción en la coincidencia floja. */
+const SAME_DESC = 0.9;
+
+const looseKey = (tx) =>
+  `${tx.account_id}|${tx.occurred_on}|${Number(tx.amount).toFixed(2)}`;
 
 /**
  * Huella determinista de un movimiento.
@@ -77,6 +107,14 @@ export function assignFingerprints(incoming, existing = []) {
   //
   // Si el índice dependiera de lo guardado, en B serían CAFE#2 y CAFE#3 y
   // entrarían otra vez, duplicando el gasto.
+  // Lo guardado, agrupado por cuenta+fecha+monto, para la coincidencia 1 a 1.
+  const pool = new Map();
+  for (const e of existing) {
+    const k = looseKey(e);
+    if (!pool.has(k)) pool.set(k, []);
+    pool.get(k).push({ tx: e, used: false });
+  }
+
   const seenInBatch = new Map();
   for (const tx of incoming) {
     const k = identityKey(tx);
@@ -84,9 +122,33 @@ export function assignFingerprints(incoming, existing = []) {
     seenInBatch.set(k, n + 1);
 
     tx.fingerprint = fingerprint(tx, n);
-    // Es duplicado si esa huella exacta ya está guardada.
-    tx.duplicate = existingPrints.has(tx.fingerprint);
-    tx.duplicateReason = tx.duplicate ? 'exacto' : null;
+    tx.duplicate = false;
+    tx.duplicateReason = null;
+
+    // (1) huella exacta ya guardada. Se "gasta" también la entrada del pool
+    // para que otro movimiento nuevo no la use por segunda vez.
+    if (existingPrints.has(tx.fingerprint)) {
+      tx.duplicate = true;
+      tx.duplicateReason = 'exacto';
+      const slot = (pool.get(looseKey(tx)) || [])
+        .find((s) => !s.used && s.tx.fingerprint === tx.fingerprint);
+      if (slot) slot.used = true;
+      continue;
+    }
+
+    // (1b) coincidencia floja 1 a 1: misma cuenta/fecha/monto y descripción
+    // casi idéntica, sin importar el tipo ni la huella guardada.
+    const candidates = (pool.get(looseKey(tx)) || []).filter((s) => !s.used);
+    let best = null;
+    for (const slot of candidates) {
+      const score = similarity(tx.description, slot.tx.description);
+      if (score >= SAME_DESC && (!best || score > best.score)) best = { slot, score };
+    }
+    if (best) {
+      best.slot.used = true;
+      tx.duplicate = true;
+      tx.duplicateReason = 'exacto';
+    }
   }
   return incoming;
 }
@@ -97,8 +159,8 @@ export function assignFingerprints(incoming, existing = []) {
 
 /** Coeficiente de Dice sobre bigramas: 1 = idénticas, 0 = nada que ver. */
 export function similarity(a, b) {
-  const A = normalizeDescription(a);
-  const B = normalizeDescription(b);
+  const A = normalizeDescription(cleanDesc(a));
+  const B = normalizeDescription(cleanDesc(b));
   if (!A || !B) return 0;
   if (A === B) return 1;
   if (A.length < 2 || B.length < 2) return A === B ? 1 : 0;
@@ -166,6 +228,33 @@ function daysApart(a, b) {
   const t2 = Date.parse(`${b}T00:00:00Z`);
   if (Number.isNaN(t1) || Number.isNaN(t2)) return Infinity;
   return (t1 - t2) / 86400000;
+}
+
+/**
+ * Confirma traspasos "por revisar" buscando su pareja en OTRA de tus cuentas.
+ *
+ * Un traspaso entre tus cuentas aparece dos veces: sale de una y entra a otra,
+ * con el mismo monto y casi la misma fecha. Si lo que se marcó para revisar
+ * (porque el banco no imprimió tu nombre) tiene su pareja ya registrada como
+ * transferencia en otra cuenta, deja de ser una duda.
+ *
+ * @returns {Array} el mismo arreglo; a los confirmados se les quita
+ *          `needs_review` y se les pone `confirmedBy` con la pareja encontrada.
+ */
+export function confirmTransferPairs(incoming, existing = [], { dayWindow = 3 } = {}) {
+  for (const tx of incoming) {
+    if (!tx.needs_review || tx.kind !== 'transfer') continue;
+    const pareja = existing.find((e) =>
+      e.account_id !== tx.account_id &&
+      e.kind === 'transfer' &&
+      Number(e.amount).toFixed(2) === Number(tx.amount).toFixed(2) &&
+      Math.abs(daysApart(tx.occurred_on, e.occurred_on)) <= dayWindow);
+    if (pareja) {
+      tx.needs_review = false;
+      tx.confirmedBy = { description: pareja.description, occurred_on: pareja.occurred_on };
+    }
+  }
+  return incoming;
 }
 
 /** Resumen para el preview. */

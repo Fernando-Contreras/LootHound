@@ -290,6 +290,18 @@ tr.is-off { opacity: .5; }
 tr.is-over td { background: color-mix(in srgb, var(--out) 8%, transparent); }
 .table .rank__track { min-width: 90px; display: block; }
 
+/* ------------------------------------------------------------ editar movimiento */
+.modal--wide { max-width: min(640px, calc(100vw - 2rem)); width: 100%; }
+.editform { display: grid; gap: .85rem; }
+.editform__grid { display: grid; gap: .7rem; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+.editform__field { display: grid; gap: .25rem; font-size: .8rem; color: var(--muted); }
+.editform__field[hidden] { display: none; }
+.editform__field:has(textarea), .editform__field:has([name="description"]) { grid-column: 1 / -1; }
+.editform textarea { resize: vertical; font: inherit; }
+.field-error { color: var(--out); font-size: .76rem; }
+.txrow__actions { white-space: nowrap; text-align: right; }
+.iconbtn--edit:hover { color: var(--accent); }
+
 .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .85rem; }
 .chip {
   display: inline-flex; align-items: center; gap: .35rem;

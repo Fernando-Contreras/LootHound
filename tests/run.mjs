@@ -17,6 +17,7 @@ import * as bbvaDebito from '../js/parsers/bbva-debito.js';
 import * as imp from '../js/views/import.js';
 import * as sup from '../js/supabase.js';
 import * as keepalive from '../tools/keepalive.mjs';
+import * as edit from '../js/txedit.js';
 
 import * as fxBbva from './fixtures/bbva-sintetico.js';
 import * as fxNu from './fixtures/nu-sintetico.js';
@@ -367,18 +368,18 @@ group('subir un estado de cuenta dos veces no duplica nada', () => {
 
 // ------------------------------------------------- transferencias propias
 group('transferencias entre cuentas propias (identity.js)', () => {
-  const YO = ['Juan Fernando Salinas Contreras'];
+  const YO = ['Mario Alberto Reyes Duarte'];
   const c = (description, direction, extra = {}) =>
     id.classifyMovement({ description, direction, holderNames: YO, ...extra });
 
   // El caso que rompe todo si no se detecta: te mandas dinero a ti mismo y
   // aparece como ingreso en una cuenta y como gasto en la otra.
   eq('SPEI recibido de mí mismo no es ingreso',
-    c('SPEI RECIBIDO Mercado Pago JUAN FERNANDO SALINAS CONTRERAS', 'in').kind, 'transfer');
+    c('SPEI RECIBIDO Mercado Pago MARIO ALBERTO REYES DUARTE', 'in').kind, 'transfer');
   eq('SPEI enviado a mí mismo no es gasto',
-    c('SPEI ENVIADO Mercado Pago Juan Fernando Salinas Contreras', 'out').kind, 'transfer');
+    c('SPEI ENVIADO Mercado Pago Mario Alberto Reyes Duarte', 'out').kind, 'transfer');
   eq('razón: mismo titular',
-    c('Transferencia recibida JUAN FERNANDO SALINAS CONTRERAS', 'in').reason, 'mismo-titular');
+    c('Transferencia recibida MARIO ALBERTO REYES DUARTE', 'in').reason, 'mismo-titular');
 
   // Aunque el nombre no aparezca, si nombra otra cartera tuya también cuenta
   eq('transferencia a otra cartera propia',
@@ -404,13 +405,13 @@ group('transferencias entre cuentas propias (identity.js)', () => {
 
   // No confundirse con un comercio que se llame parecido
   eq('un apellido suelto no basta',
-    id.mentionsHolder('FARMACIA SALINAS', YO), false);
+    id.mentionsHolder('FARMACIA REYES', YO), false);
   eq('nombre completo sí',
-    id.mentionsHolder('JUAN FERNANDO SALINAS CONTRERAS', YO), true);
+    id.mentionsHolder('MARIO ALBERTO REYES DUARTE', YO), true);
   eq('sin acentos y en minúsculas también',
-    id.mentionsHolder('juan fernando salinas contreras', YO), true);
+    id.mentionsHolder('mario alberto reyes duarte', YO), true);
   eq('sin nombres configurados no detecta nada',
-    id.mentionsHolder('JUAN FERNANDO SALINAS', []), false);
+    id.mentionsHolder('MARIO ALBERTO REYES', []), false);
 });
 
 // -------------------------------------------------------- efectivo
@@ -477,19 +478,19 @@ group('lo que se manda a la base cumple las restricciones', () => {
     { page: 2, text: 'No. de Cliente A8199334', items: [] },
     { page: 2, text: 'FECHA SALDO', items: [] },
     // esta linea SI pertenece al movimiento: es la contraparte
-    { page: 2, text: 'JUAN FERNANDO SALINAS CONTRERAS', items: [] },
+    { page: 2, text: 'MARIO ALBERTO REYES DUARTE', items: [] },
     { page: 2, text: 'TOTAL IMPORTE CARGOS 0.00', items: [] },
     { page: 2, text: 'TOTAL IMPORTE ABONOS 4,000.00', items: [] },
   ];
 
-  const r = bbvaDebito.parse(lines, { holderNames: ['Juan Fernando Salinas Contreras'] });
+  const r = bbvaDebito.parse(lines, { holderNames: ['Mario Alberto Reyes Duarte'] });
   const tx = r.transactions[0];
 
   eq('lee el movimiento', r.transactions.length, 1);
   eq('cabe en la columna', tx.description.length <= 200, true);
   eq('no se traga el membrete', /BBVA MEXICO|LIBRETON|PAGINA|Paseo de la Reforma/.test(tx.description), false);
   eq('no filtra el número de cuenta', /0192649233|A8199334/.test(tx.description), false);
-  eq('sí conserva la contraparte', /SALINAS CONTRERAS/.test(tx.description), true);
+  eq('sí conserva la contraparte', /REYES DUARTE/.test(tx.description), true);
   eq('y por eso lo marca como transferencia', tx.kind, 'transfer');
 
   // Red de seguridad final: pase lo que pase, nunca sale algo que la base rechace.
@@ -615,6 +616,305 @@ group('los errores dicen qué hacer', () => {
     'Demasiados intentos. Espera un momento.');
   eq('un error desconocido se muestra tal cual',
     sup.authErrorMessage(new Error('algo raro')), 'algo raro');
+});
+
+// ------------------------------------------------ duplicados: coincidencia 1 a 1
+group('un movimiento ya guardado nunca se reimporta, aunque haya cambiado', () => {
+  const guardado = (over = {}) => {
+    const tx = { account_id: 'deb', occurred_on: '2026-09-13', amount: 17646.09, kind: 'transfer',
+      description: '14/SEP SPEI ENVIADO Mercado Pago 722', ...over };
+    tx.fingerprint = dedupe.fingerprint(tx, 0);
+    return tx;
+  };
+  const nuevo = (over = {}) => ({ account_id: 'deb', occurred_on: '2026-09-13', amount: 17646.09,
+    kind: 'transfer', description: 'SPEI ENVIADO Mercado Pago 722', ...over });
+
+  // 1) El usuario corrigió el TIPO en el preview. La huella exacta ya no
+  //    coincide, pero es el mismo movimiento.
+  let lote = [nuevo({ kind: 'expense' })];
+  dedupe.assignFingerprints(lote, [guardado()]);
+  eq('cambiar el tipo no lo vuelve "nuevo"', lote[0].duplicateReason, 'exacto');
+
+  // 2) El parser dejó de pegar "14/SEP" al inicio del texto.
+  lote = [nuevo()];
+  dedupe.assignFingerprints(lote, [guardado()]);
+  eq('limpiar el texto no lo vuelve "nuevo"', lote[0].duplicate, true);
+
+  // 3) Dos cafés idénticos: uno ya guardado, el otro no. Uno a uno.
+  const cafe = (n) => ({ account_id: 'c', occurred_on: '2026-09-01', amount: 45, kind: 'expense', description: 'CAFE', n });
+  const base = [{ ...cafe(), fingerprint: dedupe.fingerprint(cafe(), 0) }];
+  lote = [cafe(), cafe()];
+  dedupe.assignFingerprints(lote, base);
+  eq('el primero ya estaba', lote[0].duplicate, true);
+  eq('el segundo es nuevo (es otra compra)', lote[1].duplicate, false);
+
+  // 4) Misma cuenta, fecha y monto pero otro comercio: son dos gastos distintos.
+  lote = [nuevo({ description: 'FARMACIA DEL AHORRO' })];
+  dedupe.assignFingerprints(lote, [guardado({ description: 'OXXO COZUMEL' })]);
+  eq('otro comercio, mismo monto: no es duplicado', lote[0].duplicate, false);
+
+  // 5) Otro monto o fecha: nunca.
+  lote = [nuevo({ amount: 17646.1 })];
+  dedupe.assignFingerprints(lote, [guardado()]);
+  eq('otro monto no es duplicado', lote[0].duplicate, false);
+  lote = [nuevo({ occurred_on: '2026-09-14' })];
+  dedupe.assignFingerprints(lote, [guardado()]);
+  eq('otra fecha no es duplicado', lote[0].duplicate, false);
+
+  // 6) Otra cuenta con lo mismo: pagaste lo mismo con dos tarjetas, son dos.
+  lote = [nuevo({ account_id: 'nu' })];
+  dedupe.assignFingerprints(lote, [guardado()]);
+  eq('misma cosa en otra cuenta no es duplicado', lote[0].duplicate, false);
+
+  // 7) Idempotente: la app lo calcula dos veces (preview y al confirmar).
+  lote = [nuevo({ kind: 'expense' })];
+  dedupe.assignFingerprints(lote, [guardado()]);
+  dedupe.assignFingerprints(lote, [guardado()]);
+  eq('calcularlo dos veces da lo mismo', lote[0].duplicate, true);
+
+  // 8) Un movimiento guardado cubre a UNO nuevo, no a varios.
+  lote = [nuevo(), nuevo({ kind: 'expense' })];
+  dedupe.assignFingerprints(lote, [guardado()]);
+  eq('uno guardado, dos idénticos entrantes: uno es duplicado',
+    lote.filter((t) => t.duplicate).length, 1);
+});
+
+group('traspasos "por revisar" se confirman con su pareja', () => {
+  const por = (over = {}) => ({ account_id: 'deb', occurred_on: '2026-09-30', amount: 9093.56,
+    kind: 'transfer', needs_review: true, ...over });
+  const pareja = (over = {}) => ({ account_id: 'mp', occurred_on: '2026-09-30', amount: 9093.56,
+    kind: 'transfer', description: 'Transferencia enviada Mario Alberto Reyes Duarte', ...over });
+
+  let l = [por()];
+  dedupe.confirmTransferPairs(l, [pareja()]);
+  eq('con pareja en otra cuenta: queda confirmado', l[0].needs_review, false);
+  eq('guarda con qué se confirmó', !!l[0].confirmedBy, true);
+
+  l = [por()];
+  dedupe.confirmTransferPairs(l, [pareja({ occurred_on: '2026-10-02' })]);
+  eq('a 2 días todavía cuenta', l[0].needs_review, false);
+
+  l = [por()];
+  dedupe.confirmTransferPairs(l, [pareja({ occurred_on: '2026-10-20' })]);
+  eq('a 20 días no es la misma operación', l[0].needs_review, true);
+
+  l = [por()];
+  dedupe.confirmTransferPairs(l, [pareja({ account_id: 'deb' })]);
+  eq('en la MISMA cuenta no sirve de pareja', l[0].needs_review, true);
+
+  l = [por()];
+  dedupe.confirmTransferPairs(l, [pareja({ kind: 'expense' })]);
+  eq('si la otra es un gasto, no es traspaso', l[0].needs_review, true);
+
+  l = [por()];
+  dedupe.confirmTransferPairs(l, [pareja({ amount: 9093.5 })]);
+  eq('otro monto no confirma', l[0].needs_review, true);
+});
+
+// ------------------------------------------------ identidad más estricta
+group('qué es "tuyo" y qué es otra persona', () => {
+  const YO = ['Mario Alberto Reyes Duarte'];
+  const c = (description, direction, extra = {}) =>
+    id.classifyMovement({ description, direction, holderNames: YO, ...extra });
+
+  // Un familiar que comparte apellidos NO eres tú.
+  eq('hermano con tus apellidos no cuenta como tú',
+    id.mentionsHolder('SPEI RECIBIDO CARLOS REYES DUARTE', YO), false);
+  eq('primo que se llama casi igual tampoco',
+    id.mentionsHolder('MARIO CARLOS REYES DUARTE', YO), false);
+  eq('tu nombre completo sí', id.mentionsHolder('MARIO ALBERTO REYES DUARTE', YO), true);
+  eq('con el último apellido cortado por el banco, sí',
+    id.mentionsHolder('MARIO ALBERTO REYES DUAR', YO), true);
+  eq('pero no una sola letra suelta de relleno',
+    id.mentionsHolder('MARIO ALBERTO REYES D', YO), false);
+  eq('no confunde un comercio parecido',
+    id.mentionsHolder('FARMACIA REYES', YO), false);
+
+  // Apodos
+  eq('el apodo "JuanFer Nu" se puede registrar',
+    id.mentionsHolder('Transferencia enviada JuanFer Nu', ['JuanFer Nu']), true);
+  eq('un apodo demasiado corto se ignora (coincidiría con todo)',
+    id.mentionsHolder('Pago a Nu Bank cliente', ['Nu']), false);
+
+  // El nombre del BANCO no dice de quién es la cuenta.
+  let r = c('SPEI RECIBIDO NUBANK Transferencia', 'in', { counterparty: 'ROBERTO PEREZ LOPEZ' });
+  eq('SPEI de Nubank con el nombre de OTRA persona es ingreso', r.kind, 'income');
+  r = c('SPEI RECIBIDO NUBANK Transferencia', 'in', { counterparty: 'MARIO ALBERTO REYES DUARTE' });
+  eq('SPEI de Nubank con TU nombre es traspaso', r.kind, 'transfer');
+  r = c('SPEI RECIBIDO Mercado Pago', 'in');
+  eq('sin nombre y mencionando tu cartera: traspaso…', r.kind, 'transfer');
+  eq('…pero marcado para revisar', r.review, true);
+  r = c('Transferencia enviada Pedro Ramirez Soto', 'out');
+  eq('transferencia a una persona cualquiera es gasto', r.kind, 'expense');
+
+  // Envíos a plataformas de inversión: dinero tuyo que sólo cambió de lugar.
+  eq('SPEI a GBM no es gasto', c('SPEI ENVIADO GBM Casa de Bolsa', 'out').kind, 'transfer');
+  eq('…su motivo es inversión', c('SPEI ENVIADO GBM Casa de Bolsa', 'out').reason, 'inversion');
+  eq('depósito a eToro tampoco', c('Transferencia enviada eToro', 'out').kind, 'transfer');
+  eq('retiro de Bitso a tu cuenta tampoco es ingreso', c('SPEI RECIBIDO Bitso', 'in').kind, 'transfer');
+  eq('una compra en una tienda no se confunde',
+    c('COMPRA GBMSTORE ABARROTES', 'out').kind, 'expense');
+
+  // Categorías por omisión de los ingresos
+  const ing = (d) => ({ kind: 'income', description: d });
+  eq('nómina → Sueldo', cat.builtinIncomeCategory(ing('PAGO DE NOMINA 1 PAGO DE NOMINA')), 'Sueldo');
+  eq('ganancia → Rendimientos', cat.builtinIncomeCategory(ing('Ganancia Beneficio de Mercado Pago')), 'Rendimientos');
+  eq('compensación → Otros ingresos', cat.builtinIncomeCategory(ing('Compensación de retraso SPEI')), 'Otros ingresos');
+  eq('un ingreso desconocido no se adivina', cat.builtinIncomeCategory(ing('SPEI RECIBIDO NUBANK')), null);
+  eq('un gasto nunca recibe categoría de ingreso',
+    cat.builtinIncomeCategory({ kind: 'expense', description: 'NOMINA' }), null);
+
+  // Compensaciones del banco
+  eq('compensación por SPEI retrasado es ingreso, aunque sea cuenta de depósitos propios',
+    c('Compensación de retraso SPEI', 'in', { depositsAreTransfers: true }).kind, 'income');
+  eq('un depósito normal en cuenta propia sigue siendo traspaso',
+    c('Depósito', 'in', { depositsAreTransfers: true }).kind, 'transfer');
+});
+
+// ------------------------------------------------ BBVA débito: fechas y nombres
+group('BBVA débito: años, fechas pegadas y contraparte', () => {
+  const COLS = [
+    { x0: 82, x1: 139, str: 'DESCRIPCIÓN' }, { x0: 216, x1: 269, str: 'REFERENCIA' },
+    { x0: 371, x1: 406, str: 'CARGOS' }, { x0: 428, x1: 463, str: 'ABONOS' },
+    { x0: 477, x1: 526, str: 'OPERACIÓN' }, { x0: 545, x1: 598, str: 'LIQUIDACIÓN' },
+  ];
+  const fila = (op, liq, texto, monto, col) => ({
+    page: 1, text: `${op} ${liq} ${texto} ${monto}`,
+    items: [
+      { x0: 21, x1: 50, str: op }, { x0: 56, x1: 85, str: liq },
+      // pdf.js pega la fecha de liquidación al texto en el mismo bloque
+      ...(texto ? [{ x0: 85, x1: 200, str: texto }] : []),
+      { x0: col === 'cargo' ? 384 : 433, x1: col === 'cargo' ? 415 : 463, str: monto },
+    ],
+  });
+  const cont = (texto) => ({ page: 1, text: texto, items: [] });
+  const armar = (periodo, filas) => [
+    { page: 1, text: `Periodo ${periodo}`, items: [] },
+    { page: 1, text: 'Detalle de Movimientos Realizados', items: [] },
+    { page: 1, text: 'OPER LIQ DESCRIPCIÓN REFERENCIA CARGOS ABONOS OPERACIÓN LIQUIDACIÓN', items: COLS },
+    ...filas,
+    { page: 2, text: 'TOTAL IMPORTE CARGOS 0.00', items: [] },
+    { page: 2, text: 'TOTAL IMPORTE ABONOS 0.00', items: [] },
+  ];
+
+  // Periodo que cruza de diciembre a enero.
+  const cruce = bbvaDebito.parse(armar('DEL 15/12/2025 AL 14/01/2026', [
+    fila('20/DIC', '20/DIC', 'PAGO DE NOMINA', '1,000.00', 'abono'),
+    fila('31/DIC', '02/ENE', 'SPEI ENVIADO Otro Banco', '500.00', 'cargo'),
+    cont('Pedro Perez Lopez'),
+    fila('10/ENE', '10/ENE', 'PAGO DE NOMINA', '2,000.00', 'abono'),
+  ]), { holderNames: ['Mario Alberto Reyes Duarte'] });
+  const f = (m) => cruce.transactions.find((t) => t.amount === m);
+  eq('diciembre se queda en el año que empieza', f(1000).occurred_on, '2025-12-20');
+  eq('enero es del año siguiente', f(2000).occurred_on, '2026-01-10');
+  eq('31-dic con liquidación 02-ene: la operación es 2025', f(500).occurred_on, '2025-12-31');
+  eq('…y la liquidación cae en 2026', f(500).posted_on, '2026-01-02');
+
+  // El texto no debe arrastrar la fecha de liquidación pegada al inicio.
+  const pegada = bbvaDebito.parse(armar('DEL 01/09/2026 AL 30/09/2026', [
+    fila('13/SEP', '14/SEP', '14/SEP RETIRO SIN TARJETA', '2,000.00', 'cargo'),
+  ]), {});
+  eq('sin "14/SEP" al inicio del nombre', pegada.transactions[0].description, 'RETIRO SIN TARJETA');
+  eq('y el retiro se reconoce', pegada.transactions[0].transfer_reason, 'retiro-efectivo');
+
+  // Un SPEI de otra persona a través de tu mismo banco NO es traspaso propio.
+  const tercero = bbvaDebito.parse(armar('DEL 01/09/2026 AL 30/09/2026', [
+    fila('11/SEP', '11/SEP', 'SPEI RECIBIDO NUBANK', '2,380.00', 'abono'),
+    cont('ROBERTO PEREZ LOPEZ'),
+  ]), { holderNames: ['Mario Alberto Reyes Duarte'] });
+  eq('SPEI de un tercero es ingreso', tercero.transactions[0].kind, 'income');
+
+  // Sin nombre: se asume tuyo pero se marca.
+  const anonimo = bbvaDebito.parse(armar('DEL 01/09/2026 AL 30/09/2026', [
+    fila('30/SEP', '30/SEP', 'SPEI RECIBIDO Mercado Pago', '9,093.56', 'abono'),
+  ]), { holderNames: ['Mario Alberto Reyes Duarte'] });
+  eq('sin nombre: traspaso', anonimo.transactions[0].kind, 'transfer');
+  eq('sin nombre: se marca para revisar', anonimo.transactions[0].needs_review, true);
+
+  eq('nombre de contraparte: lo reconoce',
+    bbvaDebito.counterpartyOf(['x', 'CUENTA: BMOV', 'ROBERTO PEREZ LOPEZ']), 'ROBERTO PEREZ LOPEZ');
+  eq('una referencia numérica no es un nombre',
+    bbvaDebito.counterpartyOf(['x', '0181791744 722 1513083MERCADO*PAGO']), null);
+});
+
+// ------------------------------------------------ editar un movimiento
+group('editar un movimiento: validación y cambios', () => {
+  const accounts = new Map([['a', { id: 'a', name: 'Efectivo' }], ['b', { id: 'b', name: 'BBVA' }]]);
+  const cats = new Map([
+    ['com', { id: 'com', name: 'Comida', kind: 'expense' }],
+    ['sue', { id: 'sue', name: 'Sueldo', kind: 'income' }],
+    ['tra', { id: 'tra', name: 'Transferencia', kind: 'both' }],
+  ]);
+  const ctx = { accountMap: accounts, categoryMap: cats };
+  const ok = (over = {}) => ({ occurred_on: '2026-09-16', description: 'Tacos', amount: '120',
+    kind: 'expense', account_id: 'a', category_id: 'com', ...over });
+  const v = (over, c = ctx) => edit.validateTransaction(ok(over), c);
+
+  eq('un movimiento correcto pasa', v({}).ok, true);
+
+  // Fechas
+  eq('rechaza 30 de febrero', v({ occurred_on: '2026-02-30' }).errors.occurred_on !== undefined, true);
+  eq('rechaza fecha vacía', v({ occurred_on: '' }).ok, false);
+  eq('rechaza 2026-13-01', v({ occurred_on: '2026-13-01' }).ok, false);
+  eq('acepta 29 de febrero bisiesto', v({ occurred_on: '2028-02-29' }).ok, true);
+  eq('rechaza 29 de febrero en año normal', v({ occurred_on: '2026-02-29' }).ok, false);
+
+  // Montos
+  eq('acepta "1,234.50"', v({ amount: '1,234.50' }).patch.amount, 1234.5);
+  eq('acepta "$99"', v({ amount: '$99' }).patch.amount, 99);
+  eq('redondea a 2 decimales', v({ amount: '10.005' }).patch.amount, 10.01);
+  eq('rechaza cero', v({ amount: '0' }).ok, false);
+  eq('rechaza negativos', v({ amount: '-5' }).ok, false);
+  eq('rechaza texto', v({ amount: 'doscientos' }).ok, false);
+  eq('rechaza vacío', v({ amount: '' }).ok, false);
+  eq('rechaza montos que no caben en la base', v({ amount: '1e15' }).ok, false);
+  eq('el monto numérico también sirve', v({ amount: 45.5 }).patch.amount, 45.5);
+
+  // Nombre y nota
+  eq('rechaza nombre vacío', v({ description: '   ' }).ok, false);
+  eq('rechaza nombre de más de 200', v({ description: 'x'.repeat(201) }).ok, false);
+  eq('acepta nombre de exactamente 200', v({ description: 'x'.repeat(200) }).ok, true);
+  eq('colapsa espacios del nombre', v({ description: '  a   b  ' }).patch.description, 'a b');
+  eq('rechaza nota de más de 500', v({ note: 'n'.repeat(501) }).ok, false);
+  eq('nota vacía queda null', v({ note: '  ' }).patch.note, null);
+
+  // Tipo, cuenta y categoría
+  eq('rechaza un tipo inventado', v({ kind: 'prestamo' }).ok, false);
+  eq('rechaza cuenta inexistente', v({ account_id: 'zzz' }).ok, false);
+  eq('rechaza categoría inexistente', v({ category_id: 'zzz' }).ok, false);
+  eq('un gasto no puede llevar categoría de ingreso', v({ category_id: 'sue' }).ok, false);
+  eq('un ingreso sí lleva categoría de ingreso', v({ kind: 'income', category_id: 'sue' }).ok, true);
+  eq('una transferencia lleva categoría "ambos"', v({ kind: 'transfer', category_id: 'tra' }).ok, true);
+  eq('una transferencia no lleva categoría de gasto', v({ kind: 'transfer', category_id: 'com' }).ok, false);
+  eq('sin categoría es válido', v({ category_id: '' }).patch.category_id, null);
+
+  // Cuenta destino
+  eq('destino distinto al origen', v({ kind: 'transfer', category_id: 'tra', counter_account_id: 'b' }).patch.counter_account_id, 'b');
+  eq('destino igual al origen se rechaza', v({ kind: 'transfer', category_id: 'tra', counter_account_id: 'a' }).ok, false);
+  eq('un gasto ignora el destino', v({ counter_account_id: 'b' }).patch.counter_account_id, null);
+
+  // Qué se guarda
+  const manual = { id: 1, source: 'manual', category_id: 'com', categorized_by: 'user', transfer_reason: null };
+  const pdf = { id: 2, source: 'pdf_import', category_id: 'com', categorized_by: 'rule', transfer_reason: 'retiro-efectivo' };
+  const pm = edit.validateTransaction(ok(), { ...ctx, previous: manual }).patch;
+  const pp = edit.validateTransaction(ok(), { ...ctx, previous: pdf }).patch;
+  eq('lo manual recibe huella aleatoria nueva', /^manual\|/.test(pm.fingerprint), true);
+  eq('lo importado NO cambia su huella', 'fingerprint' in pp, false);
+  eq('editar otra cosa no convierte la categoría de una regla en manual', pp.categorized_by, 'rule');
+  const cambia = edit.validateTransaction(ok({ category_id: 'tra', kind: 'transfer' }), { ...ctx, previous: pdf }).patch;
+  eq('cambiar la categoría sí la vuelve manual', cambia.categorized_by, 'user');
+  eq('seguir siendo transferencia conserva el motivo', cambia.transfer_reason, 'retiro-efectivo');
+  eq('dejar de ser transferencia borra el motivo', pp.transfer_reason, null);
+
+  // Sólo lo que cambió
+  const antes = { occurred_on: '2026-09-16', description: 'Tacos', amount: '120.00', note: null, kind: 'expense' };
+  eq('sin cambios no hay nada que guardar',
+    Object.keys(edit.changedFields(antes, { occurred_on: '2026-09-16', description: 'Tacos', amount: 120, note: null, kind: 'expense' })).length, 0);
+  eq('detecta sólo el monto',
+    Object.keys(edit.changedFields(antes, { occurred_on: '2026-09-16', description: 'Tacos', amount: 121, note: null, kind: 'expense' })), ['amount']);
+
+  // El mismo gasto capturado dos veces debe poder existir (dos cafés iguales).
+  eq('dos huellas manuales nunca chocan', edit.newManualFingerprint() !== edit.newManualFingerprint(), true);
 });
 
 // ------------------------------------------------ latido de Supabase

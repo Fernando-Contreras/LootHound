@@ -135,7 +135,7 @@ export function parse(lines, options = {}) {
     const isCajita = RE_CAJITA.test(description);
     const direction = sign === '-' ? 'out' : 'in';
 
-    const { kind, reason, internal } = classifyMovement({
+    const { kind, reason, internal, review } = classifyMovement({
       description,
       direction,
       holderNames,
@@ -143,6 +143,7 @@ export function parse(lines, options = {}) {
     });
 
     const tx = {
+      ...(review ? { needs_review: true } : {}),
       bank: BANK_ID,
       occurred_on: isoDate(yyyy, mm, parseInt(dd, 10)),
       posted_on: null,

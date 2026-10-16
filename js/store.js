@@ -76,6 +76,10 @@ export async function fetchTransactions({ from = null, to = null } = {}) {
     let q = sb().from('transactions').select(TX_COLUMNS)
       .order('occurred_on', { ascending: false })
       .order('created_at', { ascending: false })
+      // Desempate OBLIGATORIO al paginar: un lote insertado comparte el mismo
+      // created_at, y sin un orden total Postgres puede repetir o saltarse filas
+      // entre una página y la siguiente.
+      .order('id', { ascending: true })
       .range(page * PAGE, page * PAGE + PAGE - 1);
     if (from) q = q.gte('occurred_on', from);
     if (to) q = q.lte('occurred_on', to);
@@ -94,6 +98,7 @@ export async function fetchFingerprintIndex() {
   for (let page = 0; ; page++) {
     const rows = unwrap(await sb().from('transactions')
       .select('id,account_id,occurred_on,amount,kind,description,fingerprint')
+      .order('id', { ascending: true })   // sin orden, paginar es indeterminado
       .range(page * PAGE, page * PAGE + PAGE - 1));
     all.push(...rows);
     if (rows.length < PAGE) break;

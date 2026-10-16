@@ -12,8 +12,10 @@
 import { el, mount, toast, confirmDialog, withBusy, clear } from '../dom.js';
 import { parseStatement, PARSERS } from '../parsers/index.js';
 import { REASON_LABELS } from '../parsers/identity.js';
-import { applyRules } from '../categorize.js';
-import { assignFingerprints, flagSimilar, dedupeSummary } from '../dedupe.js';
+import { applyRules, builtinIncomeCategory } from '../categorize.js';
+import {
+  assignFingerprints, flagSimilar, dedupeSummary, confirmTransferPairs,
+} from '../dedupe.js';
 import * as fin from '../finance.js';
 import * as store from '../store.js';
 
@@ -109,6 +111,17 @@ async function handleFile(file, state, actions) {
         'cuenta con ese banco. Créala primero en Reglas → Cuentas.');
     }
 
+    // La base exige monto > 0 (CHECK). Un renglón en $0.00 o ilegible tiraría
+    // la importación ENTERA con un error sin renglón; mejor dejarlo fuera y
+    // decirlo.
+    const antes = result.transactions.length;
+    result.transactions = result.transactions.filter((t) => Number(t.amount) > 0);
+    if (result.transactions.length < antes) {
+      result.warnings.push(
+        `${antes - result.transactions.length} renglón(es) con monto en cero o ilegible ` +
+        'se omitieron: la base no acepta montos de $0.');
+    }
+
     // Enlaza automáticamente el otro lado de las transferencias internas:
     // un retiro alimenta la cuenta Efectivo, un pago de tarjeta va a la tarjeta.
     const cashAccount = [...state.accountMap.values()].find((a) => a.kind === 'cash');
@@ -140,6 +153,7 @@ async function handleFile(file, state, actions) {
       'cuenta-propia': catFor('Transferencia'),
       'deposito-propio': catFor('Transferencia'),
       'cajita': catFor('Transferencia'),
+      'inversion': catFor('Inversiones') ?? catFor('Transferencia'),
       'devolucion': catFor('Otros ingresos'),
     };
     for (const tx of result.transactions) {
@@ -147,6 +161,13 @@ async function handleFile(file, state, actions) {
       if (auto) {
         tx.category_id = auto;
         tx.categorized_by = 'rule';
+        continue;
+      }
+      // Ingresos sin regla del usuario: nómina → Sueldo, ganancias → Rendimientos...
+      if (tx.categorized_by !== 'rule') {
+        const nombre = builtinIncomeCategory(tx);
+        const id = nombre ? catFor(nombre) : null;
+        if (id) { tx.category_id = id; tx.categorized_by = 'rule'; }
       }
     }
 
@@ -154,6 +175,9 @@ async function handleFile(file, state, actions) {
     const existing = await store.fetchFingerprintIndex();
     assignFingerprints(result.transactions, existing);
     flagSimilar(result.transactions, existing);
+
+    // Traspasos "por revisar" que ya tienen su pareja en otra de tus cuentas.
+    confirmTransferPairs(result.transactions, existing);
 
     // Lo que ya está o se parece llega desmarcado; lo nuevo, marcado.
     for (const tx of result.transactions) {
@@ -204,7 +228,8 @@ function renderPreview(host, state, actions) {
       (dup.exact > 0 || dup.similar > 0) && el('div', { class: 'callout callout--info' },
         dup.exact > 0 && el('p', {},
           el('strong', {}, `${dup.exact} ya estaban registrados`),
-          ' — vienen desmarcados. Si los marcas, la base los rechazará de todas formas.'),
+          ' — no se vuelven a importar (ni con "Marcar todo"), así que un estado ' +
+          'de cuenta traslapado no duplica nada.'),
         dup.similar > 0 && el('p', {},
           el('strong', {}, `${dup.similar} se parecen a algo que ya tienes`),
           ' — mismo monto y fecha cercana. Revísalos antes de marcarlos.'),
@@ -214,9 +239,10 @@ function renderPreview(host, state, actions) {
         el('label', {},
           el('input', {
             type: 'checkbox',
-            checked: selected.length === p.transactions.length,
+            checked: selected.length === p.transactions.filter((t) => !t.duplicate).length,
             onchange: (e) => {
-              for (const t of p.transactions) t.selected = e.target.checked;
+              // Lo que ya está guardado nunca se marca: reimportarlo lo duplicaría.
+              for (const t of p.transactions) t.selected = e.target.checked && !t.duplicate;
               renderPreview(host, state, actions);
             },
           }), ' Marcar todo'),
@@ -289,6 +315,8 @@ function previewTable(p, state, rerender) {
       },
         el('td', {}, el('input', {
           type: 'checkbox', checked: tx.selected,
+          disabled: tx.duplicate === true,
+          title: tx.duplicate ? 'Ya está registrado' : null,
           onchange: (e) => { tx.selected = e.target.checked; rerender(); },
         })),
         el('td', {}, fin.dateLabel(tx.occurred_on)),
@@ -307,8 +335,15 @@ function previewTable(p, state, rerender) {
             title: 'No cuenta como gasto ni como ingreso',
           }, REASON_LABELS[tx.transfer_reason]),
           tx.needs_review && el('span', {
-            class: 'tag tag--similar', title: 'No lo reconocí con seguridad',
+            class: 'tag tag--similar',
+            title: tx.review_note ||
+              'Menciona tu otra cartera pero no trae tu nombre: probablemente es un ' +
+              'traspaso tuyo, pero confírmalo. Si no lo es, cámbialo a Ingreso o Gasto.',
           }, 'revisar'),
+          tx.confirmedBy && el('span', {
+            class: 'tag tag--transfer',
+            title: `Su pareja: "${tx.confirmedBy.description}" del ${tx.confirmedBy.occurred_on}`,
+          }, '✓ confirmado'),
         ),
         el('td', {}, el('select', {
           class: 'select-inline',
@@ -362,7 +397,17 @@ async function doImport(button, host, state, actions) {
       //      en este punto.
       const guardados = await store.fetchFingerprintIndex();
       assignFingerprints(p.transactions, guardados);
-      const seleccionados = p.transactions.filter((t) => t.selected);
+      // `duplicate` se acaba de recalcular contra lo que HAY en la base ahora
+      // mismo: aunque algo se haya marcado, lo que ya está guardado no entra.
+      const seleccionados = p.transactions.filter((t) => t.selected && !t.duplicate);
+      if (!seleccionados.length) {
+        toast('Todo lo marcado ya estaba registrado: no se importó nada nuevo.', 'ok', 6000);
+        await store.undoImport(importRecord.id);
+        pending = null;
+        clear(host);
+        await actions.reload();
+        return;
+      }
 
       const payload = seleccionados.map((t) => ({
         account_id: p.account.id,

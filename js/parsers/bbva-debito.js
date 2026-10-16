@@ -8,7 +8,7 @@
 //   01/JUL 01/JUL SPEI RECIBIDOMercado Pago              13,648.36
 //          0181791744 722 1513083MERCADO*PAGO
 //          00722969020510490114
-//          JUAN FERNANDO SALINAS CONTRERAS      ← contraparte, en renglón aparte
+//          MARIO ALBERTO REYES DUARTE      ← contraparte, en renglón aparte
 //   01/JUL 01/JUL PAGO TARJETA DE CREDITO   13,648.36
 //          1901658880 CUENTA: BMOV
 //   08/JUL 08/JUL RETIRO SIN TARJETA         2,000.00
@@ -69,6 +69,21 @@ const RE_PAGE_FURNITURE = new RegExp([
 
 /** Tope duro de la descripción; la columna de la base acepta 200. */
 const MAX_DESC = 200;
+
+/**
+ * BBVA imprime el nombre de quien te manda/recibe en un renglón propio, sólo
+ * letras: "ROBERTO PEREZ LOPEZ". Los demás renglones traen dígitos
+ * (referencias, claves de rastreo) o dos puntos ("CUENTA: BMOV").
+ */
+const RE_NAME_LINE = /^[A-Za-zÁÉÍÓÚÑáéíóúñ.'\- ]{5,}$/;
+
+export function counterpartyOf(parts) {
+  for (let i = parts.length - 1; i >= 1; i--) {
+    const p = String(parts[i]).trim();
+    if (RE_NAME_LINE.test(p) && p.split(/\s+/).length >= 2) return p;
+  }
+  return null;
+}
 const RE_AMOUNT = /^-?[\d,]+\.\d{2}$/;
 const RE_PERIODO = /Periodo\s+DEL\s+(\d{2})\/(\d{2})\/(\d{4})\s+AL\s+(\d{2})\/(\d{2})\/(\d{4})/i;
 const RE_TOTAL = /^TOTAL IMPORTE (CARGOS|ABONOS)\s+([\d,]+\.\d{2})/i;
@@ -123,22 +138,28 @@ export function parse(lines, options = {}) {
   const warnings = [];
   const totals = {};
   let period = null;
-  let year = null;
+  let year = null;       // año en que EMPIEZA el periodo
+  let endYear = null;    // año en que termina (distinto si cruza de diciembre a enero)
+  let startMonth = null;
   let cols = null;
   let inTable = false;
   let current = null; // movimiento abierto, para pegarle los renglones de abajo
 
   const flush = () => {
     if (!current) return;
-    let description = tidyDescription(current.parts.join(' '));
+    // pdf.js pega la fecha de LIQUIDACIÓN ("14/SEP") al inicio del texto de la
+    // descripción en un mismo bloque; no es parte del nombre del movimiento.
+    let description = tidyDescription(
+      current.parts.join(' ').replace(/^\s*\d{1,2}\/[A-Za-zÁÉÍÓÚáéíóú]{3}\s+/, ''));
     if (description.length > MAX_DESC) {
       // Red de seguridad: mejor recortar que reventar la importación entera.
       description = description.slice(0, MAX_DESC - 1).trim() + '…';
     }
-    const { kind, reason, internal } = classifyMovement({
+    const { kind, reason, internal, review } = classifyMovement({
       description,
       direction: current.direction,
       holderNames,
+      counterparty: counterpartyOf(current.parts),
     });
     transactions.push({
       bank: BANK_ID,
@@ -147,6 +168,8 @@ export function parse(lines, options = {}) {
       description,
       amount: current.amount,
       kind,
+      // Lo marcó como "tuyo" sólo por mencionar tu otra cartera, sin tu nombre.
+      ...(review ? { needs_review: true } : {}),
       // `direction` es lo que dice el banco (columna CARGOS o ABONOS) y es
       // independiente de cómo lo clasifiquemos. Se conserva porque los totales
       // impresos suman por dirección, no por tipo: un pago de tarjeta es
@@ -172,6 +195,8 @@ export function parse(lines, options = {}) {
           end: `${m[6]}-${m[5]}-${m[4]}`,
         };
         year = Number(m[3]);
+        startMonth = Number(m[2]);
+        endYear = Number(m[6]);
       }
     }
 
@@ -219,9 +244,16 @@ export function parse(lines, options = {}) {
         .filter((it) => !RE_AMOUNT.test(it.str) && !/^\d{2}\/[A-ZÁÉÍÓÚ]{3}$/i.test(it.str))
         .map((it) => it.str);
 
+      // Las fechas del renglón no traen año. Si el periodo cruza de diciembre a
+      // enero, los meses anteriores al de inicio son del año siguiente; y una
+      // liquidación en un mes menor al de la operación (31/DIC → 02/ENE)
+      // también cae en el año siguiente.
+      const opYear = (endYear && endYear !== year && mmOp < startMonth) ? endYear : year;
+      const liqYear = mmLiq && mmLiq < mmOp ? opYear + 1 : opYear;
+
       current = {
-        occurred_on: isoDate(year, mmOp, Number(dOp)),
-        posted_on: mmLiq ? isoDate(year, mmLiq, Number(dLiq)) : null,
+        occurred_on: isoDate(opYear, mmOp, Number(dOp)),
+        posted_on: mmLiq ? isoDate(liqYear, mmLiq, Number(dLiq)) : null,
         parts: [words.join(' ')],
         amount,
         direction,

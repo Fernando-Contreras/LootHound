@@ -29,7 +29,7 @@ function identityCard(state, actions) {
 
   const form = el('form', { class: 'formrow formrow--tight' },
     el('input', {
-      name: 'name', placeholder: 'JUAN FERNANDO SALINAS CONTRERAS',
+      name: 'name', placeholder: 'NOMBRE APELLIDO APELLIDO',
       required: true, maxlength: '80', style: { flex: '2 1 260px' },
     }),
     el('button', { class: 'btn btn--primary', type: 'submit' }, 'Agregar'),

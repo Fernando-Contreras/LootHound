@@ -106,6 +106,23 @@ export function suggestRule(description) {
   return { pattern, match_type: 'contains' };
 }
 
+/**
+ * Categoría por omisión para INGRESOS cuando ninguna regla del usuario aplicó.
+ * Sin esto, la nómina caía en "Sin categoría" y las estadísticas de ingreso
+ * quedaban en una sola cubeta sin significado. Se aplica DESPUÉS de las reglas
+ * del usuario, así que cualquier regla propia gana.
+ *
+ * @returns {string|null} nombre de la categoría, o null si no hay sugerencia
+ */
+export function builtinIncomeCategory(tx) {
+  if (tx.kind !== 'income') return null;
+  const d = normalizeDescription(tx.description);
+  if (/\b(NOMINA|SUELDO|SALARIO|QUINCENA)\b/.test(d)) return 'Sueldo';
+  if (/\b(GANANCIA|GANANCIAS|RENDIMIENTO|RENDIMIENTOS|INTERES|INTERESES)\b/.test(d)) return 'Rendimientos';
+  if (/\b(COMPENSACION|BONIFICACION|REEMBOLSO|DEVOLUCION|CASHBACK)\b/.test(d)) return 'Otros ingresos';
+  return null;
+}
+
 /** ¿Ya existe una regla equivalente? Evita proponer duplicados. */
 export function ruleExists(rules, pattern, matchType = 'contains', accountId = null) {
   const p = normalizeDescription(pattern);
