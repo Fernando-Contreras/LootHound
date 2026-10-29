@@ -17,6 +17,7 @@ import { donut, legend, lineChart } from '../charts.js';
 import {
   TYPES, TYPE_HELP, FLOW_KINDS, SUGGESTED_PLATFORMS,
   validateAccount, validateFlow, validateValue, validateGoal, planOnboarding,
+  pendingInvestmentTransfers,
 } from '../invedit.js';
 
 const money = fin.formatMoney;
@@ -63,6 +64,9 @@ export function renderInvestments(root, state, actions) {
       statsRow(summary),
       insights.length > 0 && insightsCard(insights),
       platformsTable(summary, inv, state, actions),
+      detectedCard(pendingInvestmentTransfers({
+        transactions: state.transactions, accounts: inv.accounts, flows: inv.flows,
+      }), inv, actions),
       el('div', { class: 'grid grid--2' },
         updateValuesCard(summary, inv, actions),
         addFlowCard(inv, actions),
@@ -300,6 +304,66 @@ function addFlowCard(inv, actions) {
     });
   });
   return form;
+}
+
+// ---------------------------------------------------------------------------
+// Envíos a inversión detectados en tus estados de cuenta
+// ---------------------------------------------------------------------------
+function detectedCard(pending, inv, actions) {
+  if (!pending.length) return null;
+  const activas = inv.accounts.filter((a) => !a.archived);
+
+  const fila = ({ tx, suggestedId }) => {
+    const plat = el('select', { 'aria-label': 'Plataforma' },
+      !suggestedId && el('option', { value: '' }, 'Elige plataforma…'),
+      activas.map((a) => el('option', { value: a.id, selected: a.id === suggestedId }, a.name)));
+    const kind = el('select', { 'aria-label': 'Tipo' },
+      Object.entries(FLOW_KINDS).map(([k, l]) => el('option', { value: k }, l)));
+    const registrar = el('button', { class: 'btn btn--primary', type: 'button' }, 'Registrar');
+    registrar.addEventListener('click', async () => {
+      const res = validateFlow({
+        investment_id: plat.value, kind: kind.value, amount: String(tx.amount),
+        occurred_on: tx.occurred_on, note: 'Detectado en tus movimientos',
+      }, { accountIds: new Set(inv.accounts.map((a) => a.id)) });
+      if (!res.ok) return toast(Object.values(res.errors)[0], 'error', 6000);
+      await withBusy(registrar, async () => {
+        try {
+          await store.createFlows([res.value]);
+          toast('Registrado.', 'ok');
+          await actions.reload();
+        } catch (err) { toast(store.dbErrorMessage(err), 'error', 8000); }
+      });
+    });
+    const noEs = el('button', { class: 'iconbtn', type: 'button', title: 'No es una inversión',
+      'aria-label': 'No es una inversión' }, '✕');
+    noEs.addEventListener('click', async () => {
+      const ok = await confirmDialog('¿No es una inversión?',
+        'Lo dejo como traspaso entre tus cuentas y deja de aparecer aquí. No cambia tus totales.',
+        { okLabel: 'Sí, quitarlo' });
+      if (!ok) return;
+      try {
+        await store.updateTransaction(tx.id, { transfer_reason: 'cuenta-propia' });
+        await actions.reload();
+      } catch (err) { toast(store.dbErrorMessage(err), 'error', 8000); }
+    });
+    return el('tr', {},
+      el('td', { class: 'txrow__date' }, fin.dateLabel(tx.occurred_on)),
+      el('td', {}, tx.description),
+      el('td', { class: 'num' }, money(tx.amount)),
+      el('td', {}, plat), el('td', {}, kind),
+      el('td', { class: 'txrow__actions' }, registrar, noEs));
+  };
+
+  return el('section', { class: 'card' },
+    el('h3', {}, `Detecté ${pending.length} ${pending.length === 1 ? 'envío' : 'envíos'} a inversión en tus movimientos`),
+    el('p', { class: 'muted' },
+      'Salieron de tus cuentas hacia una plataforma de inversión y todavía no están como aportación. ' +
+      'Regístralos con un clic para no capturarlos dos veces (si fue un retiro, cambia el tipo).'),
+    el('div', { class: 'table-wrap' }, el('table', { class: 'table' },
+      el('thead', {}, el('tr', {}, el('th', {}, 'Fecha'), el('th', {}, 'Movimiento'),
+        el('th', { class: 'num' }, 'Monto'), el('th', {}, 'Plataforma'), el('th', {}, 'Tipo'), el('th', {}))),
+      el('tbody', {}, pending.map(fila)))),
+  );
 }
 
 // ---------------------------------------------------------------------------

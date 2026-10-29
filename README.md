@@ -42,7 +42,8 @@ manual sólo lo que de verdad no deja rastro digital (el efectivo).
   un presupuesto que se calcula solo con la mediana de tus meses cerrados.
 - **Inversiones** — reemplaza la hoja de Excel: valor actual, cuánto has metido,
   ganancia, rendimiento anualizado (XIRR), peso por plataforma y por tipo, meta
-  mensual e historial.
+  mensual e historial. Si un estado de cuenta trae un envío a GBM, eToro, Bitso…,
+  te lo ofrece como aportación con un clic (sin capturarlo dos veces).
 - **Multi-usuario** — cada quien ve sólo sus datos, garantizado con Row Level
   Security en Postgres.
 

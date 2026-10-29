@@ -1168,6 +1168,50 @@ group('inversiones: validación de lo que se captura', () => {
     inv.planOnboarding([{ name: 'A', type: 'otro', value: '1' }], { since: '2027-01-01', today: hoy }).ok, false);
 });
 
+group('envíos a inversión detectados', () => {
+  const cuentas = [
+    { id: 'a-etoro', name: 'eToro', archived: false },
+    { id: 'a-gbm', name: 'GBM', archived: false },
+    { id: 'a-viejo', name: 'Kuspit', archived: true },
+  ];
+  const tx = (id, fecha, monto, desc, extra = {}) =>
+    ({ id, occurred_on: fecha, amount: monto, description: desc, kind: 'transfer', transfer_reason: 'inversion', ...extra });
+  const txs = [
+    tx('t1', '2026-09-10', 1500, 'SPEI ENVIADO ETORO'),
+    tx('t2', '2026-09-20', 2000, 'Transferencia a GBM Homebroker'),
+    tx('t3', '2026-09-25', 800, 'SPEI a Kuspit'),                         // plataforma archivada
+    tx('t4', '2026-09-26', 300, 'Pago de tarjeta', { transfer_reason: 'pago-tarjeta' }),
+    tx('t5', '2026-09-27', 500, 'Compra GBM', { kind: 'expense', transfer_reason: null }),
+  ];
+
+  let r = inv.pendingInvestmentTransfers({ transactions: txs, accounts: cuentas, flows: [] });
+  eq('sólo los transfer con razón inversión', r.map((x) => x.tx.id), ['t3', 't2', 't1']);
+  eq('del más reciente al más viejo y con plataforma sugerida por el nombre',
+    r.map((x) => x.suggestedId), [null, 'a-gbm', 'a-etoro']);
+
+  // Ya registrado: mismo monto a ≤ 3 días (el banco a veces fecha distinto)
+  r = inv.pendingInvestmentTransfers({
+    transactions: txs, accounts: cuentas,
+    flows: [{ amount: 1500, occurred_on: '2026-09-12', investment_id: 'a-etoro', kind: 'deposit' }],
+  });
+  eq('lo ya registrado deja de salir', r.map((x) => x.tx.id), ['t3', 't2']);
+
+  r = inv.pendingInvestmentTransfers({
+    transactions: txs, accounts: cuentas,
+    flows: [{ amount: 1500, occurred_on: '2026-09-14', investment_id: 'a-etoro', kind: 'deposit' }],
+  });
+  eq('a 4 días ya no cuenta como el mismo', r.some((x) => x.tx.id === 't1'), true);
+
+  // Uno a uno: dos envíos iguales, una sola aportación registrada
+  const dobles = [tx('d1', '2026-09-10', 1000, 'SPEI ETORO'), tx('d2', '2026-09-11', 1000, 'SPEI ETORO')];
+  r = inv.pendingInvestmentTransfers({
+    transactions: dobles, accounts: cuentas,
+    flows: [{ amount: 1000, occurred_on: '2026-09-10', investment_id: 'a-etoro', kind: 'deposit' }],
+  });
+  eq('un flujo cubre un solo envío', r.length, 1);
+  eq('sin datos no truena', inv.pendingInvestmentTransfers().length, 0);
+});
+
 // ------------------------------------------------ latido de Supabase
 group('el latido decide bien si el proyecto está vivo', () => {
   // Datos reales que cambiaron el diseño: el 14-sep se corrió el SQL y

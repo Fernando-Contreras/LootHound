@@ -5,7 +5,8 @@
 // ===========================================================================
 
 import { parseAmount, isValidISODate } from './txedit.js';
-import { todayISO } from './finance.js';
+import { todayISO, dayDiff } from './finance.js';
+import { stripAccents } from './parsers/common.js';
 
 export const TYPES = ['ahorro', 'bolsa', 'cripto', 'otro'];
 export const TYPE_HELP = {
@@ -140,4 +141,43 @@ export function planOnboarding(filas, { since, today = todayISO() } = {}) {
   }
   if (!accounts.length && !errors.length) errors.push('No escribiste nada todavía.');
   return { ok: errors.length === 0, errors, accounts, flows, values };
+}
+
+// ---------------------------------------------------------------------------
+// Envíos a inversión que salen en tus estados de cuenta
+// ---------------------------------------------------------------------------
+const slug = (s) => stripAccents(String(s ?? '')).toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/**
+ * Movimientos que el importador reconoció como "mandé dinero a una plataforma
+ * de inversión" (transfer_reason = inversion) y que todavía no tienen su
+ * aportación en `investment_flows`. Es la forma de no capturar dos veces lo que
+ * el banco ya te dijo.
+ *
+ * "Ya registrado" = hay una aportación/retiro del MISMO monto a ≤ 3 días. Es
+ * uno a uno: cada flujo cubre un solo movimiento (dos envíos iguales siguen
+ * siendo dos).
+ *
+ * @returns {Array<{tx:object, suggestedId:string|null}>} del más reciente al más viejo
+ */
+export function pendingInvestmentTransfers({ transactions = [], accounts = [], flows = [] } = {}) {
+  const libres = flows.map((f) => ({ f, usado: false }));
+  const nombres = accounts.filter((a) => !a.archived && slug(a.name).length >= 2)
+    .map((a) => ({ id: a.id, key: slug(a.name) }));
+
+  const candidatos = transactions
+    .filter((t) => t.kind === 'transfer' && t.transfer_reason === 'inversion')
+    .sort((a, b) => (a.occurred_on < b.occurred_on ? 1 : a.occurred_on > b.occurred_on ? -1 : 0));
+
+  const out = [];
+  for (const tx of candidatos) {
+    const par = libres.find((x) => !x.usado
+      && Math.abs(Number(x.f.amount) - Number(tx.amount)) < 0.005
+      && Math.abs(dayDiff(x.f.occurred_on, tx.occurred_on)) <= 3);
+    if (par) { par.usado = true; continue; }
+    const hay = slug(tx.description);
+    const m = nombres.find((n) => hay.includes(n.key));
+    out.push({ tx, suggestedId: m ? m.id : null });
+  }
+  return out;
 }
