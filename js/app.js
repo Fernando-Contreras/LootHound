@@ -168,7 +168,12 @@ async function boot() {
 
   onAuthChange(async (session) => {
     const wasLoggedIn = Boolean(state.session);
+    const sameUser = wasLoggedIn && Boolean(session) && state.session.user?.id === session.user?.id;
     state.session = session;
+    // Al regresar a la pestaña (o al renovarse el token) Supabase vuelve a avisar
+    // de la sesión. Si es la MISMA persona no hay nada que redibujar: hacerlo
+    // borraba lo que estuvieras escribiendo en cualquier formulario.
+    if (sameUser) return;
     if (session && !wasLoggedIn) {
       await loadData();
     } else if (!session) {

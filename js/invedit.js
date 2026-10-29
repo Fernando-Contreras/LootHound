@@ -108,12 +108,13 @@ export function validateGoal(raw) {
  * @param {Array<{name,type,value,contributed}>} filas  lo capturado
  * @param {{since:string, today:string}} fechas  `since` = desde cuándo empezaste
  */
-export function planOnboarding(filas, { since, today = todayISO() } = {}) {
+export function planOnboarding(filas, { since, today = todayISO(), existing = [] } = {}) {
   const errors = [];
   const accounts = []; const flows = []; const values = [];
   if (!isValidISODate(since) || since > today) errors.push('Escribe una fecha de inicio válida (no futura).');
 
-  const vistos = new Set();
+  // `existing`: plataformas que ya tienes, para no chocar con su nombre.
+  const vistos = new Set(existing);
   for (const f of filas) {
     const vacia = String(f.value ?? '').trim() === '' && String(f.contributed ?? '').trim() === '';
     if (vacia) continue;                       // plataforma sin datos: se omite

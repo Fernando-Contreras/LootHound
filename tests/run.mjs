@@ -1164,6 +1164,10 @@ group('inversiones: validación de lo que se captura', () => {
     inv.planOnboarding([{ name: 'A', type: 'otro', value: 'x' }], { since: '2026-01-01', today: hoy }).ok, false);
   eq('sin nada escrito, avisa',
     inv.planOnboarding([{ name: 'A', type: 'otro', value: '', contributed: '' }], { since: '2026-01-01', today: hoy }).ok, false);
+  eq('no deja repetir una plataforma que ya tienes',
+    inv.planOnboarding([{ name: 'nu', type: 'ahorro', value: '1' }], { since: '2026-01-01', today: hoy, existing: ['Nu'] }).ok, false);
+  eq('las nuevas sí entran junto a las que ya tienes',
+    inv.planOnboarding([{ name: 'GBM', type: 'bolsa', value: '1' }], { since: '2026-01-01', today: hoy, existing: ['Nu'] }).ok, true);
   eq('fecha de inicio futura se rechaza',
     inv.planOnboarding([{ name: 'A', type: 'otro', value: '1' }], { since: '2027-01-01', today: hoy }).ok, false);
 });

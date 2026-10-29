@@ -64,6 +64,9 @@ export function renderInvestments(root, state, actions) {
       statsRow(summary),
       insights.length > 0 && insightsCard(insights),
       platformsTable(summary, inv, state, actions),
+      el('details', { class: 'help', open: inv.accounts.length < SUGGESTED_PLATFORMS.length },
+        el('summary', {}, 'Cargar varias plataformas de golpe (como la pantalla de bienvenida)'),
+        bienvenida(state, actions, { existing: inv.accounts.map((a) => a.name) })),
       detectedCard(pendingInvestmentTransfers({
         transactions: state.transactions, accounts: inv.accounts, flows: inv.flows,
       }), inv, actions),
@@ -611,9 +614,23 @@ async function deletePlatform(r, inv, actions) {
 // ---------------------------------------------------------------------------
 // Primera vez: pasar el Excel
 // ---------------------------------------------------------------------------
-function bienvenida(state, actions) {
+// Lo escrito vive aquí, fuera de la pantalla: si la página se redibuja por
+// cualquier motivo (cambiar de mes, un aviso...) el formulario no pierde nada.
+// Sólo en memoria: no se guarda en el navegador.
+let borrador = null;
+
+function bienvenida(state, actions, { existing = [] } = {}) {
   const year = new Date().getFullYear();
-  const filas = SUGGESTED_PLATFORMS.map((s) => ({ ...s }));
+  const tengo = new Set(existing.map((n) => n.trim().toLowerCase()));
+  if (!borrador || borrador.key !== [...tengo].sort().join('|')) {
+    borrador = {
+      key: [...tengo].sort().join('|'),
+      since: `${year}-01-01`,
+      filas: SUGGESTED_PLATFORMS.filter((s) => !tengo.has(s.name.toLowerCase())).map((s) => ({ ...s })),
+    };
+  }
+  const filas = borrador.filas;
+  if (!filas.length) filas.push({ name: '', type: 'otro' });
 
   const body = el('tbody', {});
   const pintar = () => {
@@ -633,11 +650,12 @@ function bienvenida(state, actions) {
   };
   pintar();
 
-  const since = el('input', { type: 'date', value: `${year}-01-01`, max: fin.todayISO() });
+  const since = el('input', { type: 'date', value: borrador.since, max: fin.todayISO(),
+    oninput: (e) => { borrador.since = e.target.value; } });
   const btn = el('button', { class: 'btn btn--primary', type: 'button' }, 'Guardar mis inversiones');
 
   btn.addEventListener('click', async () => {
-    const plan = planOnboarding(filas, { since: since.value });
+    const plan = planOnboarding(filas, { since: since.value, existing });
     if (!plan.ok) return toast(plan.errors[0], 'error', 8000);
 
     await withBusy(btn, async () => {
@@ -652,6 +670,7 @@ function bienvenida(state, actions) {
           await store.upsertValues(plan.values.map(({ name, ...v }) => ({ ...v, investment_id: id.get(name) })));
         }
         toast('Listo, tus inversiones ya están en LootHound.', 'ok', 6000);
+        borrador = null;
         await actions.reload();
       } catch (err) {
         // Si algo falla a medias, se deshace: dejar plataformas sin datos obligaría
