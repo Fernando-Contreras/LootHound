@@ -13,6 +13,7 @@ import { el, mount, toast, confirmDialog, withBusy, clear } from '../dom.js';
 import { parseStatement, PARSERS } from '../parsers/index.js';
 import { REASON_LABELS } from '../parsers/identity.js';
 import { applyRules, builtinIncomeCategory } from '../categorize.js';
+import { unknownIncomeNote } from '../review.js';
 import {
   assignFingerprints, flagSimilar, dedupeSummary, confirmTransferPairs,
 } from '../dedupe.js';
@@ -189,7 +190,15 @@ async function handleFile(file, state, actions) {
         const nombre = builtinIncomeCategory(tx);
         const id = nombre ? catFor(nombre) : null;
         if (id) { tx.category_id = id; tx.categorized_by = 'rule'; }
+        // Un ingreso que ninguna regla reconoce no debe quedar en "Sin categoría"
+        // ni en una categoría de gasto/traspaso: va a "Otros ingresos".
+        else if (tx.kind === 'income' && tx.categorized_by !== 'rule') {
+          tx.category_id = catFor('Otros ingresos') ?? tx.category_id;
+        }
       }
+      // Ingreso grande que no se reconoce: que se vea en el preview.
+      const duda = unknownIncomeNote(tx);
+      if (duda && !tx.needs_review) { tx.needs_review = true; tx.review_note = duda; }
     }
 
     // Duplicados: exactos (huella) y parecidos (fuzzy)

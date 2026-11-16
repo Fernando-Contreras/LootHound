@@ -1,9 +1,11 @@
 // Dashboard: balance del mes, desglose por categoría, tendencia.
 // Ningún cálculo se hace aquí: todo sale de finance.js.
 
-import { el, mount } from '../dom.js';
+import { el, mount, toast, withBusy } from '../dom.js';
 import { donut, legend, monthlyBars, rankBars } from '../charts.js';
 import * as fin from '../finance.js';
+import * as store from '../store.js';
+import { reviewItems, confirmIncomePatch, markTransferPatch } from '../review.js';
 
 export function renderDashboard(root, state, actions) {
   const month = state.month;
@@ -36,6 +38,11 @@ export function renderDashboard(root, state, actions) {
           onclick: () => actions.setMonth(nextMonth(month)),
         }, '›'),
       ),
+
+      // ---- ingresos grandes que hay que confirmar ---------------------
+      reviewCard(reviewItems({
+        transactions: state.transactions, categoryMap: state.categoryMap,
+      }).filter((i) => i.tx.occurred_on >= from && i.tx.occurred_on <= to), state, actions),
 
       // ---- tarjetas de balance ---------------------------------------
       el('div', { class: 'stats' },
@@ -101,6 +108,53 @@ export function renderDashboard(root, state, actions) {
       ),
     ),
   );
+}
+
+/**
+ * Ingresos grandes que la app no sabe si son ingreso de verdad o dinero tuyo
+ * que sólo cambió de cuenta. Mientras no se confirmen cuentan como ingreso, así
+ * que pueden inflar el mes: por eso salen arriba del todo.
+ */
+function reviewCard(items, state, actions) {
+  if (!items.length) return null;
+  const total = items.reduce((a, i) => a + Number(i.tx.amount), 0);
+  const cuenta = (id) => state.accountMap.get(id)?.name ?? '—';
+  const patchCtx = { categoryMap: state.categoryMap, categoryByName: state.categoryByName };
+
+  const fila = ({ tx, reason, pair }) => {
+    const guardar = async (btn, hacer, mensaje) => withBusy(btn, async () => {
+      try { await hacer(); toast(mensaje, 'ok'); await actions.reload(); }
+      catch (err) { toast(store.dbErrorMessage(err), 'error', 8000); }
+    });
+
+    const esIngreso = el('button', { class: `btn ${reason === 'pareja' ? 'btn--ghost' : 'btn--primary'} btn--sm`, type: 'button' }, 'Sí, es ingreso');
+    esIngreso.addEventListener('click', () => guardar(esIngreso,
+      () => store.updateTransaction(tx.id, confirmIncomePatch(tx, patchCtx)), 'Listo, cuenta como ingreso.'));
+
+    const esMio = el('button', { class: `btn ${reason === 'pareja' ? 'btn--primary' : 'btn--ghost'} btn--sm`, type: 'button' }, 'Es mío (traspaso)');
+    esMio.addEventListener('click', () => guardar(esMio, async () => {
+      await store.updateTransaction(tx.id, markTransferPatch(patchCtx));
+      // la otra mitad, si la app la tenía como gasto, también era un traspaso
+      if (pair && pair.kind === 'expense') await store.updateTransaction(pair.id, markTransferPatch(patchCtx));
+    }, 'Listo, ya no cuenta como ingreso.'));
+
+    return el('li', { class: 'reviewlist__item' },
+      el('div', { class: 'reviewlist__main' },
+        el('strong', {}, fin.formatMoney(tx.amount)), ' · ', fin.dateLabel(tx.occurred_on), ' · ', cuenta(tx.account_id),
+        el('div', { class: 'muted' }, tx.description.slice(0, 90)),
+        el('div', { class: 'note' }, reason === 'pareja'
+          ? `El ${fin.dateLabel(pair.occurred_on)} salió exactamente esa cantidad de ${cuenta(pair.account_id)}: parece dinero que moviste entre tus cuentas.`
+          : 'Entró dinero que no reconozco como sueldo ni rendimientos. ¿Es un ingreso tuyo de verdad?')),
+      el('div', { class: 'reviewlist__actions' }, esIngreso, esMio));
+  };
+
+  return el('section', { class: 'card card--warn' },
+    el('h3', {}, `Por revisar: ${items.length} ${items.length === 1 ? 'ingreso' : 'ingresos'} (${fin.formatMoney(total)})`),
+    el('p', { class: 'muted' },
+      'Mientras no los confirmes cuentan como ingreso y pueden inflar tu mes. ' +
+      'Con un clic queda decidido y no se vuelve a preguntar.'),
+    el('ul', { class: 'reviewlist' }, items.slice(0, 8).map(fila)),
+    items.length > 8 && el('p', { class: 'note' }, `Y ${items.length - 8} más; aparecen al resolver éstos.`));
 }
 
 /**

@@ -7,6 +7,7 @@ import {
 } from './supabase.js';
 import * as store from './store.js';
 import * as fin from './finance.js';
+import { healPlan } from './review.js';
 import { renderSetup, renderAuth } from './views/auth.js';
 import { renderDashboard } from './views/dashboard.js';
 import { renderBudget } from './views/budget.js';
@@ -104,6 +105,7 @@ async function loadData() {
     state.rules = rules.map((r) => ({ ...r, transfer_only: Boolean(transferId) && r.category_id === transferId }));
     state.transactions = transactions;
     state.imports = imports;
+    await autoHeal();
   } catch (err) {
     console.error(err);
     // Si es un fallo de red, casi siempre es el proyecto pausado: vale más
@@ -115,6 +117,33 @@ async function loadData() {
   } finally {
     state.loading = false;
   }
+}
+
+/**
+ * Corrige en silencio lo que es un error obvio de categoría (un ingreso que
+ * quedó como "Transferencia" o "Sin categoría"). Sólo toca la categoría, nunca
+ * el monto ni el tipo, y nunca lo que el usuario escogió a mano. Lo dudoso no se
+ * decide aquí: va al Resumen como "Por revisar" (ver review.js).
+ */
+async function autoHeal() {
+  const plan = healPlan({
+    transactions: state.transactions,
+    categoryMap: state.categoryMap,
+    categoryByName: state.categoryByName,
+  });
+  let n = 0;
+  for (const c of plan.slice(0, 200)) {
+    try {
+      await store.updateTransaction(c.id, { category_id: c.category_id, categorized_by: 'rule' });
+      const t = state.transactions.find((x) => x.id === c.id);
+      if (t) { t.category_id = c.category_id; t.categorized_by = 'rule'; }
+      n += 1;
+    } catch (err) {
+      console.error(err);
+      break;                          // si falla uno, no insistir con el resto
+    }
+  }
+  if (n) toast(`Acomodé la categoría de ${n} ${n === 1 ? 'ingreso' : 'ingresos'} que estaba${n === 1 ? '' : 'n'} mal.`, 'ok', 6000);
 }
 
 // ---------------------------------------------------------------------------

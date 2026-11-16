@@ -119,6 +119,11 @@ code { font-family: var(--mono); font-size: .9em; }
 .card__actions { display: flex; align-items: center; gap: .6rem; }
 .modal p { white-space: pre-line; }
 .card--error { border-color: var(--out); }
+.card--warn { border-color: var(--warn); background: var(--warn-soft); }
+.reviewlist { list-style: none; margin: .5rem 0 0; padding: 0; display: grid; gap: .75rem; }
+.reviewlist__item { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; justify-content: space-between; padding-top: .75rem; border-top: 1px solid var(--border, rgba(127,127,127,.25)); }
+.reviewlist__main { min-width: 0; flex: 1 1 260px; overflow-wrap: anywhere; }
+.reviewlist__actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 
 /* ------------------------------------------------------------------- login */
 .auth-wrap { min-height: 100dvh; display: grid; place-items: center; padding: 1.25rem; }

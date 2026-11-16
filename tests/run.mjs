@@ -19,6 +19,7 @@ import * as sup from '../js/supabase.js';
 import * as keepalive from '../tools/keepalive.mjs';
 import * as edit from '../js/txedit.js';
 import * as inv from '../js/invedit.js';
+import * as inv_review from '../js/review.js';
 
 import * as fxBbva from './fixtures/bbva-sintetico.js';
 import * as fxNu from './fixtures/nu-sintetico.js';
@@ -1232,6 +1233,92 @@ group('envíos a inversión detectados', () => {
   });
   eq('un flujo cubre un solo envío', r.length, 1);
   eq('sin datos no truena', inv.pendingInvestmentTransfers().length, 0);
+});
+
+// ------------------------------------------------ autocuidado (review.js)
+group('la app detecta sola lo que huele mal', () => {
+  const categorias = [
+    { id: 'c-sueldo', name: 'Sueldo', kind: 'income' },
+    { id: 'c-rend', name: 'Rendimientos', kind: 'income' },
+    { id: 'c-otros', name: 'Otros ingresos', kind: 'income' },
+    { id: 'c-transf', name: 'Transferencia', kind: 'both' },
+    { id: 'c-sin', name: 'Sin categoría', kind: 'both' },
+    { id: 'c-comida', name: 'Comida', kind: 'expense' },
+  ];
+  const categoryMap = new Map(categorias.map((c) => [c.id, c]));
+  const categoryByName = new Map(categorias.map((c) => [c.name, c]));
+  const tx = (id, fecha, monto, desc, o = {}) =>
+    ({ id, occurred_on: fecha, amount: monto, description: desc, kind: 'income', account_id: 'A', category_id: 'c-sin', categorized_by: 'none', ...o });
+
+  // --- lo dudoso: ingresos grandes que no se reconocen -----------------
+  const datos = [
+    tx('lap', '2026-10-16', 25000, 'Monto retirado Fondo', { account_id: 'MP' }),       // desconocido
+    tx('nom', '2026-10-14', 24000, 'PAGO DE NOMINA', { category_id: 'c-sueldo', categorized_by: 'rule' }),
+    tx('gan', '2026-10-15', 5000, 'Ganancias', { category_id: 'c-rend' }),               // rendimiento: se explica solo
+    tx('chico', '2026-10-15', 300, 'Algo chico'),                                         // abajo del umbral
+    tx('ok', '2026-10-10', 3000, 'Pago de un amigo', { categorized_by: 'user', category_id: 'c-otros' }), // ya confirmado
+    tx('rec', '2026-10-20', 9000, 'Transferencia recibida', { account_id: 'MP' }),       // con pareja
+    tx('env', '2026-10-19', 9000, 'Transferencia enviada', { account_id: 'BBVA', kind: 'expense' }),
+    tx('mismo', '2026-10-21', 4000, 'Algo', { account_id: 'MP' }),
+    tx('mismo2', '2026-10-21', 4000, 'Otro', { account_id: 'MP', kind: 'expense' }),     // misma cuenta: NO es pareja
+  ];
+  const items = inv_review.reviewItems({ transactions: datos, categoryMap });
+  eq('sólo salen los dudosos', items.map((i) => i.tx.id).sort(), ['lap', 'mismo', 'rec']);
+  eq('del más reciente al más viejo', items.map((i) => i.tx.id), ['mismo', 'rec', 'lap']);
+  eq('con otra mitad en otra cuenta, lo dice',
+    items.find((i) => i.tx.id === 'rec').reason, 'pareja');
+  eq('…y sabe cuál es',
+    items.find((i) => i.tx.id === 'rec').pair.id, 'env');
+  eq('la otra mitad en la MISMA cuenta no cuenta como pareja',
+    items.find((i) => i.tx.id === 'mismo').reason, 'desconocido');
+  eq('un ingreso grande sin explicación se pregunta', items.find((i) => i.tx.id === 'lap').reason, 'desconocido');
+  eq('pareja fuera de ±3 días no cuenta',
+    inv_review.reviewItems({ transactions: [
+      tx('a', '2026-10-20', 9000, 'X', { account_id: 'MP' }),
+      tx('b', '2026-10-10', 9000, 'Y', { account_id: 'BBVA', kind: 'expense' }),
+    ], categoryMap }).find((i) => i.tx.id === 'a').reason, 'desconocido');
+
+  // la misma regla en el importador
+  eq('importar: ingreso grande desconocido se marca',
+    typeof inv_review.unknownIncomeNote(tx('n', '2026-10-01', 25000, 'Monto retirado Fondo')), 'string');
+  eq('importar: nómina no se marca', inv_review.unknownIncomeNote(tx('n', '2026-10-01', 25000, 'PAGO DE NOMINA')), null);
+  eq('importar: un gasto no se marca', inv_review.unknownIncomeNote(tx('n', '2026-10-01', 25000, 'X', { kind: 'expense' })), null);
+
+  // --- lo obvio: se corrige en silencio ---------------------------------
+  const sucios = [
+    tx('s1', '2026-10-12', 2380, 'SPEI RECIBIDO', { category_id: 'c-transf', categorized_by: 'rule' }),
+    tx('s2', '2026-09-14', 17000, '14/SEP PAGO DE NOMINA 1'),                       // sin categoría → Sueldo
+    tx('s3', '2026-09-15', 80, 'Ganancias'),                                          // → Rendimientos
+    tx('s4', '2026-09-16', 50, 'Cosa', { category_id: 'c-comida' }),                  // categoría de gasto
+    tx('b1', '2026-09-17', 99, 'Bien', { category_id: 'c-otros' }),                   // ya está bien
+    tx('m1', '2026-09-18', 99, 'Lo puse yo', { category_id: 'c-transf', categorized_by: 'user' }), // manual: no se toca
+    tx('g1', '2026-09-19', 99, 'Gasto', { kind: 'expense', category_id: 'c-transf' }), // no es ingreso: no se toca
+  ];
+  const plan = inv_review.healPlan({ transactions: sucios, categoryMap, categoryByName });
+  eq('arregla sólo los ingresos mal categorizados',
+    plan.map((c) => `${c.id}:${c.to}`).sort(),
+    ['s1:Otros ingresos', 's2:Sueldo', 's3:Rendimientos', 's4:Otros ingresos']);
+  eq('sin nada que arreglar, no hace nada',
+    inv_review.healPlan({ transactions: [sucios[4]], categoryMap, categoryByName }).length, 0);
+
+  // --- lo que se guarda al decidir -----------------------------------------
+  eq('"sí es ingreso" conserva una categoría de ingreso válida',
+    inv_review.confirmIncomePatch(tx('x', '2026-10-01', 5000, 'A', { category_id: 'c-otros' }), { categoryMap, categoryByName }),
+    { category_id: 'c-otros', categorized_by: 'user' });
+  eq('…y cambia una que no sirve',
+    inv_review.confirmIncomePatch(tx('x', '2026-10-01', 5000, 'A', { category_id: 'c-transf' }), { categoryMap, categoryByName }).category_id,
+    'c-otros');
+  eq('"es mío" lo vuelve traspaso, queda como decisión del usuario',
+    inv_review.markTransferPatch({ categoryByName }),
+    { kind: 'transfer', transfer_reason: 'cuenta-propia', category_id: 'c-transf', categorized_by: 'user' });
+
+  // lo decidido ya no vuelve a preguntar
+  const decidido = { ...datos[0], ...inv_review.confirmIncomePatch(datos[0], { categoryMap, categoryByName }) };
+  eq('lo confirmado no se vuelve a preguntar',
+    inv_review.reviewItems({ transactions: [decidido], categoryMap }).length, 0);
+  const mio = { ...datos[0], ...inv_review.markTransferPatch({ categoryByName }) };
+  eq('lo marcado como traspaso deja de ser ingreso y no se pregunta',
+    inv_review.reviewItems({ transactions: [mio], categoryMap }).length, 0);
 });
 
 // ------------------------------------------------ latido de Supabase
