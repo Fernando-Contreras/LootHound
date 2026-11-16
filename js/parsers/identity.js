@@ -79,8 +79,11 @@ export const INTERNAL_CONCEPTS = {
   cardPayment: /pago\s+(de\s+)?tarjeta\s+de\s+cr[eé]dito|pago\s+tdc|bmovil\.pago\s+tdc/i,
   // sacar efectivo: el dinero no se gastó, cambió de bolsillo
   cashWithdrawal: /retiro\s+sin\s+tarjeta|retiro\s+en\s+cajero|disposici[oó]n\s+de\s+efectivo|retiro\s+de\s+efectivo|cajero\s+autom/i,
-  // apartados / cajitas: el dinero ni siquiera sale de la cuenta
-  pocket: /(dep[oó]sito\s+en|retiro\s+de)\s+cajita|apartado/i,
+  // apartados / cajitas: el dinero ni siquiera sale de la cuenta.
+  // Mercado Pago llama a lo mismo "Monto retirado/depositado <fondo>" (ej.
+  // "Monto retirado Lap"): sacar dinero de un fondo propio a tu saldo NO es un
+  // ingreso. Sin esto, un retiro de $25k de un fondo salía como sueldo extra.
+  pocket: /(dep[oó]sito\s+en|retiro\s+de)\s+cajita|apartado|\bmonto\s+(retirado|depositado|reservado)\b/i,
   // mandar dinero a (o recibirlo de) una plataforma de inversión: sigue siendo
   // tuyo, sólo cambió de lugar. Contarlo como gasto inflaría el mes por lo que
   // en realidad ahorraste.

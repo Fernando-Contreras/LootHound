@@ -743,6 +743,12 @@ group('qué es "tuyo" y qué es otra persona', () => {
   eq('un apodo demasiado corto se ignora (coincidiría con todo)',
     id.mentionsHolder('Pago a Nu Bank cliente', ['Nu']), false);
 
+  // Fondos propios de Mercado Pago: sacar o meter dinero ahí no es ingreso ni gasto.
+  eq('"Monto retirado Lap" no es ingreso', c('Monto retirado Lap', 'in').kind, 'transfer');
+  eq('"Monto depositado Lap" no es gasto', c('Monto depositado Lap', 'out').kind, 'transfer');
+  eq('pero los rendimientos del fondo sí son ingreso', c('Ganancias', 'in').kind, 'income');
+  eq('y un monto de otra cosa no se confunde', c('Monto cobrado por la tienda', 'in').kind, 'income');
+
   // El nombre del BANCO no dice de quién es la cuenta.
   let r = c('SPEI RECIBIDO NUBANK Transferencia', 'in', { counterparty: 'ROBERTO PEREZ LOPEZ' });
   eq('SPEI de Nubank con el nombre de OTRA persona es ingreso', r.kind, 'income');
