@@ -5,7 +5,7 @@ import { el, mount, toast, withBusy } from '../dom.js';
 import { donut, legend, monthlyBars, rankBars } from '../charts.js';
 import * as fin from '../finance.js';
 import * as store from '../store.js';
-import { reviewItems, confirmIncomePatch, markTransferPatch } from '../review.js';
+import { reviewItems, confirmIncomePatch, confirmExpensePatch, markTransferPatch } from '../review.js';
 
 export function renderDashboard(root, state, actions) {
   const month = state.month;
@@ -117,7 +117,6 @@ export function renderDashboard(root, state, actions) {
  */
 function reviewCard(items, state, actions) {
   if (!items.length) return null;
-  const total = items.reduce((a, i) => a + Number(i.tx.amount), 0);
   const cuenta = (id) => state.accountMap.get(id)?.name ?? '—';
   const patchCtx = { categoryMap: state.categoryMap, categoryByName: state.categoryByName };
 
@@ -127,31 +126,37 @@ function reviewCard(items, state, actions) {
       catch (err) { toast(store.dbErrorMessage(err), 'error', 8000); }
     });
 
-    const esIngreso = el('button', { class: `btn ${reason === 'pareja' ? 'btn--ghost' : 'btn--primary'} btn--sm`, type: 'button' }, 'Sí, es ingreso');
-    esIngreso.addEventListener('click', () => guardar(esIngreso,
-      () => store.updateTransaction(tx.id, confirmIncomePatch(tx, patchCtx)), 'Listo, cuenta como ingreso.'));
+    const esGasto = tx.kind === 'expense';
+    const palabra = esGasto ? 'gasto' : 'ingreso';
+
+    const loEs = el('button', { class: `btn ${reason === 'pareja' ? 'btn--ghost' : 'btn--primary'} btn--sm`, type: 'button' }, `Sí, es ${palabra}`);
+    loEs.addEventListener('click', () => guardar(loEs,
+      () => store.updateTransaction(tx.id, esGasto ? confirmExpensePatch() : confirmIncomePatch(tx, patchCtx)),
+      `Listo, cuenta como ${palabra}.`));
 
     const esMio = el('button', { class: `btn ${reason === 'pareja' ? 'btn--primary' : 'btn--ghost'} btn--sm`, type: 'button' }, 'Es mío (traspaso)');
     esMio.addEventListener('click', () => guardar(esMio, async () => {
       await store.updateTransaction(tx.id, markTransferPatch(patchCtx));
-      // la otra mitad, si la app la tenía como gasto, también era un traspaso
-      if (pair && pair.kind === 'expense') await store.updateTransaction(pair.id, markTransferPatch(patchCtx));
-    }, 'Listo, ya no cuenta como ingreso.'));
+      // la otra mitad (el gasto de una cuenta o el ingreso de la otra) también era un traspaso
+      if (pair && pair.kind !== 'transfer') await store.updateTransaction(pair.id, markTransferPatch(patchCtx));
+    }, `Listo, ya no cuenta como ${palabra}.`));
 
     return el('li', { class: 'reviewlist__item' },
       el('div', { class: 'reviewlist__main' },
         el('strong', {}, fin.formatMoney(tx.amount)), ' · ', fin.dateLabel(tx.occurred_on), ' · ', cuenta(tx.account_id),
         el('div', { class: 'muted' }, tx.description.slice(0, 90)),
         el('div', { class: 'note' }, reason === 'pareja'
-          ? `El ${fin.dateLabel(pair.occurred_on)} salió exactamente esa cantidad de ${cuenta(pair.account_id)}: parece dinero que moviste entre tus cuentas.`
+          ? (esGasto
+            ? `El ${fin.dateLabel(pair.occurred_on)} entró exactamente esa cantidad a ${cuenta(pair.account_id)}: parece dinero que moviste entre tus cuentas, no un gasto.`
+            : `El ${fin.dateLabel(pair.occurred_on)} salió exactamente esa cantidad de ${cuenta(pair.account_id)}: parece dinero que moviste entre tus cuentas.`)
           : 'Entró dinero que no reconozco como sueldo ni rendimientos. ¿Es un ingreso tuyo de verdad?')),
-      el('div', { class: 'reviewlist__actions' }, esIngreso, esMio));
+      el('div', { class: 'reviewlist__actions' }, loEs, esMio));
   };
 
   return el('section', { class: 'card card--warn' },
-    el('h3', {}, `Por revisar: ${items.length} ${items.length === 1 ? 'ingreso' : 'ingresos'} (${fin.formatMoney(total)})`),
+    el('h3', {}, `Por revisar: ${items.length} ${items.length === 1 ? 'movimiento' : 'movimientos'}`),
     el('p', { class: 'muted' },
-      'Mientras no los confirmes cuentan como ingreso y pueden inflar tu mes. ' +
+      'Mientras no los confirmes cuentan tal cual y pueden inflar tus ingresos o tus gastos. ' +
       'Con un clic queda decidido y no se vuelve a preguntar.'),
     el('ul', { class: 'reviewlist' }, items.slice(0, 8).map(fila)),
     items.length > 8 && el('p', { class: 'note' }, `Y ${items.length - 8} más; aparecen al resolver éstos.`));

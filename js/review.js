@@ -9,9 +9,11 @@
 //                Sólo toca la categoría, nunca el monto ni el tipo, y jamás
 //                algo que el usuario categorizó a mano.
 //
-//   reviewItems  lo DUDOSO, que sólo el usuario puede decidir: dinero que entró
-//                y que la app no sabe si es un ingreso de verdad o un movimiento
-//                entre sus propias cuentas. Se muestra con dos botones. Lo que
+//   reviewItems  lo DUDOSO, que sólo el usuario puede decidir: (a) dinero que
+//                entró y que la app no sabe si es un ingreso de verdad o un
+//                movimiento entre sus propias cuentas, y (b) un gasto grande
+//                cuyo mismo monto entró a otra cuenta suya (parece un traspaso
+//                que quedó como gasto). Se muestra con dos botones. Lo que
 //                decida queda guardado (`categorized_by = 'user'`) y no vuelve
 //                a preguntar.
 //
@@ -52,25 +54,50 @@ export function unknownIncomeNote(tx) {
  *   otra mitad (dinero que sólo cambió de cuenta).
  */
 export function reviewItems({ transactions = [], categoryMap = new Map() } = {}) {
-  // movimientos que NO son ingreso, indexados por monto: candidatos a "otra mitad"
-  const salidas = new Map();
-  for (const t of transactions) {
-    if (t.kind === 'income') continue;
-    const k = cents(t.amount);
-    if (!salidas.has(k)) salidas.set(k, []);
-    salidas.get(k).push(t);
-  }
+  const esConfiable = (t) => {
+    const nombre = categoryMap.get(t.category_id)?.name;
+    return TRUSTED.has(nombre) || TRUSTED.has(builtinIncomeCategory(t));
+  };
+  const indexar = (lista) => {
+    const m = new Map();
+    for (const t of lista) {
+      const k = cents(t.amount);
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(t);
+    }
+    return m;
+  };
+  const buscar = (m, tx) => (m.get(cents(tx.amount)) ?? []).find((o) =>
+    o.account_id !== tx.account_id && Math.abs(dayDiff(o.occurred_on, tx.occurred_on)) <= 3) ?? null;
+
+  // candidatos a "otra mitad" de un ingreso: cualquier movimiento que no sea ingreso
+  const salidas = indexar(transactions.filter((t) => t.kind !== 'income'));
+  // y de un gasto: ingresos que ni son sueldo/rendimientos ni los confirmó el usuario
+  const entradas = indexar(transactions.filter((t) =>
+    t.kind === 'income' && t.categorized_by !== 'user' && !esConfiable(t)));
 
   const out = [];
+  const yaEmparejados = new Set();
+
+  // 1) ingresos grandes: desconocidos, o con su otra mitad en otra cuenta
   for (const tx of transactions) {
     if (tx.kind !== 'income' || Number(tx.amount) < BIG_INCOME) continue;
     if (tx.categorized_by === 'user') continue;                  // ya lo confirmó
-    const nombre = categoryMap.get(tx.category_id)?.name;
-    if (TRUSTED.has(nombre) || TRUSTED.has(builtinIncomeCategory(tx))) continue;
-
-    const pair = (salidas.get(cents(tx.amount)) ?? []).find((o) =>
-      o.account_id !== tx.account_id && Math.abs(dayDiff(o.occurred_on, tx.occurred_on)) <= 3) ?? null;
+    if (esConfiable(tx)) continue;
+    const pair = buscar(salidas, tx);
+    if (pair) yaEmparejados.add(pair.id);
     out.push({ tx, reason: pair ? 'pareja' : 'desconocido', pair });
+  }
+
+  // 2) gastos grandes que en realidad parecen dinero movido entre tus cuentas:
+  //    el mismo monto entró a otra cuenta tuya. Sólo si hay esa otra mitad;
+  //    un gasto grande sin pareja (la renta, una compra) es normal.
+  for (const tx of transactions) {
+    if (tx.kind !== 'expense' || Number(tx.amount) < BIG_INCOME) continue;
+    if (tx.categorized_by === 'user' || tx.source === 'manual') continue;
+    if (yaEmparejados.has(tx.id)) continue;                      // ya salió junto a su ingreso
+    const pair = buscar(entradas, tx);
+    if (pair) out.push({ tx, reason: 'pareja', pair });
   }
   return out.sort((a, b) => (a.tx.occurred_on < b.tx.occurred_on ? 1 : a.tx.occurred_on > b.tx.occurred_on ? -1 : 0));
 }
@@ -99,6 +126,11 @@ export function confirmIncomePatch(tx, { categoryMap, categoryByName }) {
   const sirve = cat && cat.kind !== 'expense' && cat.name !== 'Transferencia' && cat.name !== 'Sin categoría';
   const category_id = sirve ? tx.category_id : (categoryByName.get('Otros ingresos')?.id ?? tx.category_id);
   return { category_id, categorized_by: 'user' };
+}
+
+/** Lo que se guarda cuando dice "sí, es un gasto": se queda como está, ya decidido. */
+export function confirmExpensePatch() {
+  return { categorized_by: 'user' };
 }
 
 /** Lo que se guarda cuando dice "es mío, sólo cambió de cuenta". */

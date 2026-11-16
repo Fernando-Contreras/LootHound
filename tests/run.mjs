@@ -1278,6 +1278,37 @@ group('la app detecta sola lo que huele mal', () => {
       tx('b', '2026-10-10', 9000, 'Y', { account_id: 'BBVA', kind: 'expense' }),
     ], categoryMap }).find((i) => i.tx.id === 'a').reason, 'desconocido');
 
+  // --- gastos que parecen traspasos ------------------------------------
+  const gastos = [
+    tx('g-par', '2026-10-05', 7000, 'SPEI enviado', { kind: 'expense', account_id: 'BBVA' }),     // entró lo mismo a otra cuenta
+    tx('g-par-in', '2026-10-06', 7000, 'Transferencia recibida', { account_id: 'MP', category_id: 'c-sin' }),
+    tx('g-renta', '2026-10-05', 8500, 'RENTA', { kind: 'expense', account_id: 'BBVA' }),          // gasto grande normal: sin pareja
+    tx('g-nom', '2026-10-14', 24000, 'PAGO DE NOMINA', { account_id: 'BBVA', category_id: 'c-sueldo' }),
+    tx('g-igual', '2026-10-13', 24000, 'Compra grande', { kind: 'expense', account_id: 'MP' }),   // coincide con una NÓMINA: no se toma como pareja
+    tx('g-chico', '2026-10-05', 90, 'Cafe', { kind: 'expense', account_id: 'BBVA' }),
+    tx('g-man', '2026-10-05', 3000, 'Efectivo', { kind: 'expense', account_id: 'EF', source: 'manual' }),
+    tx('g-man-in', '2026-10-05', 3000, 'Otra cosa', { account_id: 'MP', categorized_by: 'user', category_id: 'c-otros' }), // ingreso ya confirmado: no es pareja
+  ];
+  const gi = inv_review.reviewItems({ transactions: gastos, categoryMap });
+  eq('gasto con su otra mitad en otra cuenta: se pregunta una sola vez (junto al ingreso)',
+    gi.filter((i) => i.tx.id === 'g-par' || i.tx.id === 'g-par-in').map((i) => i.tx.id), ['g-par-in']);
+  eq('…y el ingreso conoce a su pareja', gi.find((i) => i.tx.id === 'g-par-in').pair.id, 'g-par');
+  eq('un gasto grande normal no se pregunta', gi.some((i) => i.tx.id === 'g-renta'), false);
+  eq('un gasto que coincide con una nómina no es traspaso', gi.some((i) => i.tx.id === 'g-igual'), false);
+  eq('un gasto chico no se pregunta', gi.some((i) => i.tx.id === 'g-chico'), false);
+  eq('un gasto manual no se pregunta', gi.some((i) => i.tx.id === 'g-man'), false);
+
+  // gasto cuyo ingreso pareja ya se decidió como traspaso/ingreso real: sólo el gasto, si aplica
+  const solo = inv_review.reviewItems({ transactions: [
+    tx('x1', '2026-10-05', 7000, 'SPEI enviado', { kind: 'expense', account_id: 'BBVA' }),
+    tx('x2', '2026-10-06', 7000, 'Entrada rara', { account_id: 'MP', kind: 'transfer', category_id: 'c-transf' }),
+  ], categoryMap });
+  eq('si la otra mitad ya es traspaso, no se vuelve a preguntar nada', solo.length, 0);
+  eq('"sí es gasto" sólo lo deja decidido', inv_review.confirmExpensePatch(), { categorized_by: 'user' });
+  const decidioGasto = { ...gastos[0], ...inv_review.confirmExpensePatch() };
+  eq('un gasto confirmado no vuelve a preguntar',
+    inv_review.reviewItems({ transactions: [decidioGasto, gastos[1]], categoryMap }).some((i) => i.tx.id === 'g-par'), false);
+
   // la misma regla en el importador
   eq('importar: ingreso grande desconocido se marca',
     typeof inv_review.unknownIncomeNote(tx('n', '2026-10-01', 25000, 'Monto retirado Fondo')), 'string');
