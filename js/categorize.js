@@ -22,6 +22,10 @@ export function matchRule(tx, rules) {
   for (const rule of rules) {
     if (rule.enabled === false) continue;
     if (rule.account_id && rule.account_id !== tx.account_id) continue;
+    // Una regla que manda a "Transferencia" (ej. "SPEI") sólo vale para lo que
+    // de verdad es un traspaso. Un SPEI que te manda otra persona es ingreso, y
+    // con esa regla caía en "Transferencia".
+    if (rule.transfer_only && tx.kind && tx.kind !== 'transfer') continue;
     if (!testRule(rule, haystack, tx.description)) continue;
 
     const score = {

@@ -225,6 +225,18 @@ group('reglas (categorize.js)', () => {
   eq('respeta reglas deshabilitadas',
     cat.matchRule({ description: 'apagada' }, reglas), null);
 
+  // "SPEI → Transferencia" sólo debe valer para traspasos, no para un SPEI que
+  // te manda otra persona (ingreso) ni para uno que mandas a un tercero (gasto).
+  const rSpei = [{ id: 'r9', pattern: 'SPEI', match_type: 'contains', category_id: 'transf', transfer_only: true }];
+  eq('SPEI que es traspaso → Transferencia',
+    cat.matchRule({ description: 'SPEI ENVIADO', kind: 'transfer' }, rSpei)?.category_id, 'transf');
+  eq('SPEI que es ingreso NO cae en Transferencia',
+    cat.matchRule({ description: 'SPEI RECIBIDO', kind: 'income' }, rSpei), null);
+  eq('SPEI que es gasto NO cae en Transferencia',
+    cat.matchRule({ description: 'SPEI ENVIADO', kind: 'expense' }, rSpei), null);
+  eq('sin kind (captura vieja) se comporta como antes',
+    cat.matchRule({ description: 'SPEI' }, rSpei)?.category_id, 'transf');
+
   const txs = [
     { description: 'OXXO COXUMEL 65' },
     { description: 'COMERCIO RARO' },

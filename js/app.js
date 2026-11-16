@@ -99,7 +99,9 @@ async function loadData() {
     state.accountMap = new Map(accounts.map((a) => [a.id, a]));
     state.categoryMap = new Map(categories.map((c) => [c.id, c]));
     state.categoryByName = new Map(categories.map((c) => [c.name, c]));
-    state.rules = rules;
+    // Marca las reglas que mandan a "Transferencia" (ver matchRule).
+    const transferId = state.categoryByName.get('Transferencia')?.id;
+    state.rules = rules.map((r) => ({ ...r, transfer_only: Boolean(transferId) && r.category_id === transferId }));
     state.transactions = transactions;
     state.imports = imports;
   } catch (err) {
